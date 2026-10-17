@@ -23,7 +23,7 @@ internal static class WorkspaceSearch {
         foreach (VirtualFsNode child in dir.Children) {
             if (results.Count >= maxResults) return;
             if (child.IsDeleted) continue;
-            string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
+            string fullPath = WzPath.Combine(prefix, child.Name);
 
             if (child.IsDir) {
                 if (kindFilter is null && string.IsNullOrEmpty(valFilter) && MatchesText(child.Name, fullPath, nameFilter, exact, cmp)) {
@@ -76,8 +76,8 @@ internal static class WorkspaceSearch {
 
         foreach (WzProperty prop in props) {
             if (results.Count >= maxResults) return;
-            string propSubPath = string.IsNullOrEmpty(subPath) ? prop.Name : $"{subPath}/{prop.Name}";
-            string fullPath = $"{imgPath}/{propSubPath}";
+            string propSubPath = WzPath.Combine(subPath, prop.Name);
+            string fullPath = WzPath.Combine(imgPath, propSubPath);
             (RepackerPropertyKind pKind, string disp) = DescribeWzValue(prop.Value);
 
             bool kindMatches = !kindFilter.HasValue || kindFilter.Value == RepackerPropertyKind.None || kindFilter.Value == pKind;

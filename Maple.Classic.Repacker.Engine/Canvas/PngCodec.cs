@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.IO.Hashing;
 using System.Text;
 using Maple.Classic.Repacker.Engine.IO;
 
@@ -49,37 +50,12 @@ internal enum PngInterlaceMethod : byte {
 }
 
 /// <summary>
-/// Zero-dependency cross-platform PNG encoder and decoder operating on 32-bit RGBA8888 pixel buffers.
+/// Cross-platform PNG encoder and decoder operating on 32-bit RGBA8888 pixel buffers.
 /// </summary>
 public static class PngCodec {
     private static ReadOnlySpan<byte> PngSignature => [137, 80, 78, 71, 13, 10, 26, 10];
 
-    private static readonly uint[] CrcTable = BuildCrcTable();
-
-    private static uint[] BuildCrcTable() {
-        var table = new uint[256];
-        for (uint n = 0; n < 256; n++) {
-            uint c = n;
-            for (int k = 0; k < 8; k++) {
-                c = (c & 1) != 0 ? 0xEDB88320u ^ (c >> 1) : c >> 1;
-            }
-            table[n] = c;
-        }
-        return table;
-    }
-
     private const byte BitDepth8 = 8;
-
-    private static uint ComputeCrc(ReadOnlySpan<byte> type, ReadOnlySpan<byte> data) {
-        uint c = 0xFFFFFFFFu;
-        foreach (byte b in type) {
-            c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
-        }
-        foreach (byte b in data) {
-            c = CrcTable[(c ^ b) & 0xFF] ^ (c >> 8);
-        }
-        return c ^ 0xFFFFFFFFu;
-    }
 
     public static byte[] EncodeRgba(int width, int height, ReadOnlySpan<byte> rgba) {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(width, 0);
@@ -319,8 +295,11 @@ public static class PngCodec {
         stream.Write(prefix);
         stream.Write(data);
 
-        Span<byte> crc = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32BigEndian(crc, ComputeCrc(prefix[4..], data));
-        stream.Write(crc);
+        var crc = new Crc32();
+        crc.Append(prefix[4..]);
+        crc.Append(data);
+        Span<byte> crcBytes = stackalloc byte[sizeof(uint)];
+        BinaryPrimitives.WriteUInt32BigEndian(crcBytes, crc.GetCurrentHashAsUInt32());
+        stream.Write(crcBytes);
     }
 }

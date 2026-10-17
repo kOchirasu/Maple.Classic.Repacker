@@ -30,7 +30,7 @@ internal static class CanvasLinkResolver {
         if (!string.IsNullOrEmpty(inlink)) {
             if (ResolvePropertyNode(imgRoot, inlink) is WzValue.Canvas inCanvas) {
                 visualCanvas = inCanvas;
-                resolvedLinkPath = $"{imgPath}/{inlink}";
+                resolvedLinkPath = WzPath.Combine(imgPath, inlink);
             }
         } else if (!string.IsNullOrEmpty(outlink)) {
             (WzValue.Canvas? outCanvas, string? outResolved) = ResolveOutlinkCanvas(archives, session, outlink);
@@ -78,12 +78,12 @@ internal static class CanvasLinkResolver {
             }
         }
 
-        string[] segments = targetImgPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] segments = WzPath.Segments(targetImgPart);
         for (int i = 0; i < segments.Length; i++) {
-            string sub = string.Join('/', segments[i..]);
+            string sub = WzPath.Join(segments[i..]);
             AddCandidate(sub);
             if (i < segments.Length - 1 && !string.Equals(segments[^2], "_Canvas", StringComparison.OrdinalIgnoreCase)) {
-                string withCanvas = string.Join('/', [.. segments[i..^1], "_Canvas", segments[^1]]);
+                string withCanvas = WzPath.Join([.. segments[i..^1], "_Canvas", segments[^1]]);
                 AddCandidate(withCanvas);
             }
         }
@@ -107,7 +107,7 @@ internal static class CanvasLinkResolver {
                         WzValue parsed = candidate.GetOrParseImage(tryImgPath);
                         if (ResolvePropertyNode(parsed, innerSubPath) is WzValue.Canvas found &&
                             !(found.Width <= 1 && found.Height <= 1 && found["_outlink"] is not null)) {
-                            return (found, $"{candidate.Name}:{tryImgPath}/{innerSubPath}");
+                            return (found, $"{candidate.Name}:{WzPath.Combine(tryImgPath, innerSubPath)}");
                         }
                     } catch {
                         // Ignore and keep searching
@@ -175,7 +175,7 @@ internal static class CanvasLinkResolver {
 
         var frames = new List<AnimationFrameDto>(numberedProps.Count);
         foreach ((int idx, WzProperty prop) in numberedProps) {
-            string frameSubPath = string.IsNullOrEmpty(containerSubPath) ? prop.Name : $"{containerSubPath}/{prop.Name}";
+            string frameSubPath = WzPath.Combine(containerSubPath, prop.Name);
             WzValue frameVal = prop.Value;
             if (frameVal is WzValue.Uol(var uolStr)) {
                 (WzValue? resolved, _) = ResolveUolTarget(imgRoot, frameSubPath, uolStr);
@@ -192,7 +192,7 @@ internal static class CanvasLinkResolver {
                 foreach (WzProperty sub in frameObj.Children) {
                     WzValue subVal = sub.Value;
                     if (subVal is WzValue.Uol(var subUol)) {
-                        (WzValue? resSub, _) = ResolveUolTarget(imgRoot, $"{frameSubPath}/{sub.Name}", subUol);
+                        (WzValue? resSub, _) = ResolveUolTarget(imgRoot, WzPath.Combine(frameSubPath, sub.Name), subUol);
                         if (resSub is not null) subVal = resSub;
                     }
                     if (subVal is WzValue.Canvas c) {
@@ -213,7 +213,7 @@ internal static class CanvasLinkResolver {
 
             frames.Add(new AnimationFrameDto(
                 prop.Name,
-                $"{imgPath}/{frameSubPath}",
+                WzPath.Combine(imgPath, frameSubPath),
                 preview.Width,
                 preview.Height,
                 preview.Format,

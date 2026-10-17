@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
 using System.Reflection;
+using System.Threading.Channels;
 using Maple.Classic.Repacker.Engine.Models;
 using Maple.Classic.Repacker.Engine.Workspace;
 using Maple.Classic.Repacker.UI.Rpc;
@@ -128,33 +129,23 @@ public class Program {
         _ = Task.Run(async () => {
             long lastSentVersion = 0;
             using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(50));
-            while (await timer.WaitForNextTickAsync(broadcastCts.Token).ConfigureAwait(false)) {
-                try {
+            try {
+                while (await timer.WaitForNextTickAsync(broadcastCts.Token).ConfigureAwait(false)) {
                     long versionSnapshot = workspace.StateVersion;
-                    if (versionSnapshot == lastSentVersion || wsClients.IsEmpty) {
+                    if (versionSnapshot == lastSentVersion) {
                         continue;
                     }
-
-                    foreach (KeyValuePair<Guid, WsClientConnection> kvp in wsClients) {
-                        WsClientConnection conn = kvp.Value;
+                    foreach ((Guid id, WsClientConnection conn) in wsClients) {
                         if (conn.Socket.State == WebSocketState.Open) {
-                            try {
-                                await conn.SendStatusDeltaAsync(rpcContext, broadcastCts.Token).ConfigureAwait(false);
-                            } catch {
-                                if (conn.Socket.State != WebSocketState.Open && wsClients.TryRemove(kvp.Key, out WsClientConnection? removed)) {
-                                    removed.Dispose();
-                                }
-                            }
-                        } else if (wsClients.TryRemove(kvp.Key, out WsClientConnection? removed)) {
-                            removed.Dispose();
+                            conn.QueueStatusDelta();
+                        } else {
+                            wsClients.TryRemove(id, out _);
                         }
                     }
                     lastSentVersion = versionSnapshot;
-                } catch (OperationCanceledException) when (broadcastCts.IsCancellationRequested) {
-                    break;
-                } catch {
-                    // Keep broadcast loop alive on transient errors
                 }
+            } catch (OperationCanceledException) {
+                // Shutting down
             }
         }, broadcastCts.Token);
 
@@ -164,12 +155,12 @@ public class Program {
                 return;
             }
             using WebSocket ws = await ctx.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            using var conn = new WsClientConnection(ws);
+            await using var conn = new WsClientConnection(ws, rpcContext, ctx.RequestAborted);
             var id = Guid.NewGuid();
 
             try {
                 // First status for a new connection is a full snapshot
-                await conn.SendStatusDeltaAsync(rpcContext, ctx.RequestAborted).ConfigureAwait(false);
+                conn.QueueStatusDelta();
                 wsClients[id] = conn;
 
                 byte[] buf = new byte[65536];
@@ -202,8 +193,8 @@ public class Program {
                                 (bool ok, object? data) = rpcRouter.Dispatch(method, rawParams);
                                 byte[] replyBytes = RpcSerializer.Encode(new RpcResponseEnvelope("rpc", rpcId, ok, data));
                                 // Push this operation's state changes first, so the client is up to date when the reply resolves
-                                await conn.SendStatusDeltaAsync(rpcContext, ctx.RequestAborted).ConfigureAwait(false);
-                                await conn.SendBinaryAsync(replyBytes, ctx.RequestAborted).ConfigureAwait(false);
+                                conn.QueueStatusDelta();
+                                conn.QueueSend(replyBytes);
                             }
                         } catch {
                             // Ignore malformed RPC frame or disconnected socket
@@ -370,38 +361,52 @@ public class Program {
         return null;
     }
 
-    private sealed class WsClientConnection(WebSocket socket) : IDisposable {
-        public WebSocket Socket { get; } = socket;
-        private readonly SemaphoreSlim sendLock = new(1, 1);
+    /// <summary>
+    /// One WebSocket client. Every outgoing message goes through a single-reader channel drained by one send loop, so
+    /// sends never overlap (WebSocket allows one send at a time), messages keep their queue order, and the status
+    /// tracker is only ever touched by that loop.
+    /// </summary>
+    private sealed class WsClientConnection : IAsyncDisposable {
+        /// <summary>A queued send: a ready payload, or (with no payload) "send whatever status changed since the last one".</summary>
+        private readonly record struct OutgoingMessage(byte[]? Payload) {
+            public static OutgoingMessage StatusDelta => new(null);
+        }
+
+        private readonly Channel<OutgoingMessage> outbox = Channel.CreateUnbounded<OutgoingMessage>(new UnboundedChannelOptions { SingleReader = true });
         private readonly StatusDeltaTracker statusTracker = new();
+        private readonly RpcContext rpcContext;
+        private readonly Task sendLoop;
 
-        public async Task SendBinaryAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) {
-            await sendLock.WaitAsync(ct).ConfigureAwait(false);
-            try {
-                await SendUnlockedAsync(payload, ct).ConfigureAwait(false);
-            } finally {
-                sendLock.Release();
-            }
+        public WsClientConnection(WebSocket socket, RpcContext rpcContext, CancellationToken connectionAborted) {
+            Socket = socket;
+            this.rpcContext = rpcContext;
+            sendLoop = RunSendLoopAsync(connectionAborted);
         }
 
-        /// <summary>Sends whatever changed since this client's last status (nothing if it is up to date).</summary>
-        public async Task SendStatusDeltaAsync(RpcContext rpcContext, CancellationToken ct) {
-            await sendLock.WaitAsync(ct).ConfigureAwait(false);
+        public WebSocket Socket { get; }
+
+        public void QueueSend(byte[] payload) => outbox.Writer.TryWrite(new OutgoingMessage(payload));
+
+        /// <summary>Queues this client's status delta; it is computed when sent, so it reflects everything queued before it.</summary>
+        public void QueueStatusDelta() => outbox.Writer.TryWrite(OutgoingMessage.StatusDelta);
+
+        private async Task RunSendLoopAsync(CancellationToken ct) {
             try {
-                if (statusTracker.NextDelta(rpcContext) is { } delta) {
-                    await SendUnlockedAsync(RpcSerializer.Encode(delta), ct).ConfigureAwait(false);
+                await foreach (OutgoingMessage message in outbox.Reader.ReadAllAsync(ct).ConfigureAwait(false)) {
+                    byte[]? payload = message.Payload
+                        ?? (statusTracker.NextDelta(rpcContext) is { } delta ? RpcSerializer.Encode(delta) : null);
+                    if (payload is not null && Socket.State == WebSocketState.Open) {
+                        await Socket.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                    }
                 }
-            } finally {
-                sendLock.Release();
+            } catch (Exception ex) when (ex is OperationCanceledException or WebSocketException or ObjectDisposedException) {
+                // Client went away; the receive loop notices and disposes the connection
             }
         }
 
-        private async Task SendUnlockedAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) {
-            if (Socket.State == WebSocketState.Open) {
-                await Socket.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
-            }
+        public async ValueTask DisposeAsync() {
+            outbox.Writer.TryComplete();
+            await sendLoop.ConfigureAwait(false);
         }
-
-        public void Dispose() => sendLock.Dispose();
     }
 }

@@ -8,8 +8,8 @@ namespace Maple.Classic.Repacker.UI.Rpc;
 /// client is therefore a full snapshot.
 /// </summary>
 /// <remarks>
-/// Not thread-safe: each connection owns one tracker and only uses it while holding its send lock, which also keeps
-/// status messages ordered relative to RPC replies.
+/// Not thread-safe: each connection owns one tracker and only its send loop uses it, which also keeps status messages
+/// ordered relative to RPC replies.
 /// </remarks>
 internal sealed class StatusDeltaTracker {
     private byte[]? sentArchives;

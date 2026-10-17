@@ -35,7 +35,7 @@ internal static class NodeDtoBuilder {
     internal static IEnumerable<NodeChild> DescribeDirectoryChildren(ArchiveSession session, string dirPath, VirtualFsNode dirNode) {
         bool parentDeleted = session.IsVirtualPathDeleted(dirPath);
         foreach (VirtualFsNode child in dirNode.Children) {
-            string childPath = string.IsNullOrEmpty(dirPath) ? child.Name : $"{dirPath}/{child.Name}";
+            string childPath = WzPath.Combine(dirPath, child.Name);
             bool deleted = parentDeleted || child.IsDeleted;
             if (child.IsDir) {
                 (int dirs, int images) = ArchiveSession.CountVirtualRecursive(child);
@@ -82,7 +82,7 @@ internal static class NodeDtoBuilder {
         if (target is WzValue.Convex(var items)) {
             for (int i = 0; i < items.Count; i++) {
                 string itemName = i.ToString(CultureInfo.InvariantCulture);
-                yield return DescribeProperty(session, imgPath, JoinSubPath(subPath, itemName), itemName, items[i], parentDeleted);
+                yield return DescribeProperty(session, imgPath, WzPath.Combine(subPath, itemName), itemName, items[i], parentDeleted);
             }
             yield break;
         }
@@ -96,7 +96,7 @@ internal static class NodeDtoBuilder {
         (RepackerPropertyKind kind, string display) = DescribeWzValue(value);
         int childCount = GetChildCount(value) + session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
         return new NodeChild(
-            $"{imgPath}/{propSubPath}",
+            WzPath.Combine(imgPath, propSubPath),
             name,
             RepackerNodeKind.Property,
             kind,
@@ -115,7 +115,7 @@ internal static class NodeDtoBuilder {
         var list = new List<(string Name, string SubPath, WzValue Value, bool IsDeleted)>();
         if (target.Children is { } props) {
             foreach (WzProperty prop in props) {
-                list.Add((prop.Name, JoinSubPath(parentSubPath, prop.Name), prop.Value, parentDeleted));
+                list.Add((prop.Name, WzPath.Combine(parentSubPath, prop.Name), prop.Value, parentDeleted));
             }
         }
 
@@ -187,6 +187,4 @@ internal static class NodeDtoBuilder {
         return !propVal.Equals(origProp) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
     }
 
-    private static string JoinSubPath(string parent, string child) =>
-        string.IsNullOrEmpty(parent) ? child : $"{parent}/{child}";
 }

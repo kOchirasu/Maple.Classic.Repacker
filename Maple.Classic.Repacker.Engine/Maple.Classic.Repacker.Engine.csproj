@@ -17,6 +17,10 @@
     </ItemGroup>
 
     <ItemGroup>
+        <PackageReference Include="System.IO.Hashing" Version="10.0.0" />
+    </ItemGroup>
+
+    <ItemGroup>
         <InternalsVisibleTo Include="Maple.Classic.Repacker.Tests" />
     </ItemGroup>
 

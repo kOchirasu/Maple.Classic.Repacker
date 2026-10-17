@@ -603,7 +603,7 @@ public sealed class ArchiveSession : IDisposable {
                 return true;
             }
             if (child.IsDir) {
-                string childPath = string.IsNullOrEmpty(normDirPath) ? child.Name : $"{normDirPath}/{child.Name}";
+                string childPath = WzPath.Combine(normDirPath, child.Name);
                 if (IsDirectorySubtreeDirty(childPath, child)) {
                     return true;
                 }
@@ -786,15 +786,9 @@ public sealed class ArchiveSession : IDisposable {
         }
 
         // Check if an ancestor property is deleted and resolve relative to that ancestor
-        string cur = normSub;
-        while (true) {
-            int slash = cur.LastIndexOf('/');
-            if (slash <= 0) {
-                break;
-            }
-            cur = cur[..slash];
-            if (map.TryGetValue(cur, out DeletedPropertyEntry? ancestorEntry)) {
-                string remainder = normSub[(cur.Length + 1)..];
+        foreach (string ancestor in WzPath.Ancestors(normSub)) {
+            if (map.TryGetValue(ancestor, out DeletedPropertyEntry? ancestorEntry)) {
+                string remainder = normSub[(ancestor.Length + 1)..];
                 WzValue? nested = WzPropertyPaths.ResolvePropertyNode(ancestorEntry.Value, remainder);
                 if (nested is not null) {
                     return (nested, true);
@@ -814,14 +808,8 @@ public sealed class ArchiveSession : IDisposable {
 
         DeletedPropertyEntry? targetEntry = null;
         if (!map.TryGetValue(normSub, out targetEntry)) {
-            string cur = normSub;
-            while (true) {
-                int slash = cur.LastIndexOf('/');
-                if (slash <= 0) {
-                    break;
-                }
-                cur = cur[..slash];
-                if (map.TryGetValue(cur, out targetEntry)) {
+            foreach (string ancestor in WzPath.Ancestors(normSub)) {
+                if (map.TryGetValue(ancestor, out targetEntry)) {
                     break;
                 }
             }
@@ -931,7 +919,7 @@ public sealed class ArchiveSession : IDisposable {
         if (!norm.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
             norm += ".img";
         }
-        string[] parts = norm.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        string[] parts = WzPath.Segments(norm);
         VirtualFsNode cur = VirtualRoot;
         for (int i = 0; i < parts.Length - 1; i++) {
             string dirName = parts[i];
@@ -986,9 +974,8 @@ public sealed class ArchiveSession : IDisposable {
         if (string.IsNullOrEmpty(norm)) {
             return false;
         }
-        int lastSlash = norm.LastIndexOf('/');
-        string parentPath = lastSlash >= 0 ? norm[..lastSlash] : "";
-        string leafName = lastSlash >= 0 ? norm[(lastSlash + 1)..] : norm;
+        string parentPath = WzPath.Parent(norm);
+        string leafName = WzPath.Name(norm);
 
         VirtualFsNode? parent = ResolveVirtualNode(parentPath);
         if (parent is null) {
@@ -1013,7 +1000,7 @@ public sealed class ArchiveSession : IDisposable {
 
         bool restoredAny = false;
         VirtualFsNode cur = VirtualRoot;
-        foreach (string part in norm.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
+        foreach (string part in WzPath.Segments(norm)) {
             if (cur.IsDir) {
                 EnsureDirectoryLinked(cur);
             }
@@ -1074,15 +1061,14 @@ public sealed class ArchiveSession : IDisposable {
             return false;
         }
 
-        int lastSlash = norm.LastIndexOf('/');
-        string parentPath = lastSlash >= 0 ? norm[..lastSlash] : "";
+        string parentPath = WzPath.Parent(norm);
         VirtualFsNode? parent = ResolveVirtualNode(parentPath);
         if (parent is null || parent.Children.Any(c => !ReferenceEquals(c, target) && c.Name == newLeafName)) {
             return false;
         }
 
         parent.HasChildStructureChanges = true;
-        string newFullPath = string.IsNullOrEmpty(parentPath) ? newLeafName : $"{parentPath}/{newLeafName}";
+        string newFullPath = WzPath.Combine(parentPath, newLeafName);
         if (target.IsImage) {
             EnsureBaselineRecorded(norm);
             WzValue parsed = GetOrParseImage(norm);
@@ -1130,7 +1116,7 @@ public sealed class ArchiveSession : IDisposable {
                 if (child.IsDeleted) {
                     continue;
                 }
-                string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
+                string fullPath = WzPath.Combine(prefix, child.Name);
                 if (child.IsDir) {
                     CollectRecursive(child, fullPath);
                 } else if (child.IsImage) {

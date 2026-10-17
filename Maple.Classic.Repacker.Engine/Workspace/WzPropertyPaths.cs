@@ -8,15 +8,8 @@ namespace Maple.Classic.Repacker.Engine.Workspace;
 public static class WzPropertyPaths {
     public static (WzValue? Target, string? ResolvedSubPath) ResolveUolTarget(WzValue imgRoot, string uolNodeSubPath, string uolExpression) {
         // UOL is relative to the parent of the UOL property
-        int lastSlash = uolNodeSubPath.LastIndexOf('/');
-        string parentSubPath = lastSlash >= 0 ? uolNodeSubPath[..lastSlash] : string.Empty;
-
-        var segments = new List<string>();
-        if (!string.IsNullOrEmpty(parentSubPath)) {
-            segments.AddRange(parentSubPath.Split('/', StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        foreach (string part in uolExpression.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
+        var segments = new List<string>(WzPath.Segments(WzPath.Parent(uolNodeSubPath)));
+        foreach (string part in WzPath.Segments(uolExpression)) {
             if (part == ".") {
                 continue;
             }
@@ -29,7 +22,7 @@ public static class WzPropertyPaths {
             }
         }
 
-        string targetSubPath = string.Join('/', segments);
+        string targetSubPath = WzPath.Join(segments);
         WzValue? resolved = ResolvePropertyNode(imgRoot, targetSubPath);
         return (resolved, resolved is not null ? targetSubPath : null);
     }
@@ -81,9 +74,8 @@ public static class WzPropertyPaths {
             return false;
         }
 
-        int lastSlash = subPath.LastIndexOf('/');
-        string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-        string leafName = lastSlash >= 0 ? subPath[(lastSlash + 1)..] : subPath;
+        string parentSubPath = WzPath.Parent(subPath);
+        string leafName = WzPath.Name(subPath);
 
         WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
         if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int cIdx) && cIdx >= 0 && cIdx < items.Count) {
