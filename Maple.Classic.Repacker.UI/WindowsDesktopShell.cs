@@ -261,7 +261,6 @@ internal sealed class RepackerDesktopForm : Form {
             menuDuplicate,
             menuRename,
             new ToolStripSeparator(),
-            CreateTreeContextMenuItem("Inline _outlink / _inlink Sprites", "inlineLinks"),
             menuExportAuto,
             new ToolStripSeparator(),
             menuRestore,

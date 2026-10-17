@@ -29,6 +29,9 @@
                         <button type="button" data-action="saveArchiveDisk">Save Active .wz to Disk... <kbd>Ctrl+Shift+S</kbd></button>
                         <button type="button" data-action="downloadArchive">Download Repacked .wz</button>
                         <div class="menu-sep"></div>
+                        <button type="button" data-action="openBulkExportModal">Bulk Asset Export to Directory...</button>
+                        <button type="button" data-action="openInlineOutlinksModal">Export / Inline _outlink Sprites...</button>
+                        <div class="menu-sep"></div>
                         <button type="button" data-action="closeActiveArchive">Close Active Archive</button>
                     </div>
                 </div>
@@ -55,8 +58,6 @@
                     <button type="button" class="menu-trigger">Tools</button>
                     <div class="menu-dropdown">
                         <button type="button" data-action="focusGlobalSearch">Global WZ Search... <kbd>Ctrl+F</kbd></button>
-                        <button type="button" data-action="inlineOutlinksNode">Inline _outlink / _inlink Sprites</button>
-                        <button type="button" data-action="openBatchExportTab">Batch Export Sprites / Audio / JSON...</button>
                         <div class="menu-sep"></div>
                         <button type="button" data-action="exportSelectedJson">Export Selected Node as .json</button>
                         <button type="button" data-action="exportSelectedImg">Export Selected Image as .img</button>
@@ -84,9 +85,6 @@
                 </button>
                 <button type="button" class="cmd-btn" id="btnRedo" title="Redo edit in current .img (Ctrl+Y)" disabled>
                     <span>Redo</span>
-                </button>
-                <button type="button" class="cmd-btn" id="btnInlineLinks" title="Resolve and inline _outlink / _inlink sprites into standalone Canvas pixels">
-                    <span>Inline Links</span>
                 </button>
             </div>
 
@@ -185,7 +183,6 @@
                             <div class="link-banner-text" id="linkBannerText"></div>
                             <div class="link-banner-actions">
                                 <button type="button" class="cmd-btn small" id="btnJumpToLinkedTarget">Jump to Target</button>
-                                <button type="button" class="cmd-btn small accent" id="btnInlineCurrentCanvas">Inline Sprite Here</button>
                             </div>
                         </div>
 
@@ -358,14 +355,13 @@
 
         <div class="splitter-h" id="bottomSplitter" title="Drag to resize Bottom Workbench"></div>
 
-        <!-- Bottom Workbench (JSON Editor, Global Search, Hex Dump, Batch Tools, Console Logs) -->
+        <!-- Bottom Workbench (JSON Editor, Global Search, Hex Dump, Console Logs) -->
         <section class="workbench-pane" id="workbenchPane">
             <div class="workbench-header">
                 <div class="workbench-tabs" id="workbenchTabs">
                     <button type="button" class="wb-tab active" data-tab="Json">JSON Subtree Editor</button>
                     <button type="button" class="wb-tab" data-tab="Search">Global WZ Search <span class="tab-pill" id="searchCountPill">0</span></button>
                     <button type="button" class="wb-tab" data-tab="Hex">Hex &amp; Binary Inspector</button>
-                    <button type="button" class="wb-tab" data-tab="Batch">Batch Export &amp; Repack</button>
                     <button type="button" class="wb-tab" data-tab="Logs">Console Logs <span class="tab-pill" id="logCountPill">0</span></button>
                 </div>
 
@@ -429,37 +425,7 @@
                     </div>
                 </div>
 
-                <!-- Tab 4: Batch Export & Repack Tools -->
-                <div class="wb-panel" id="wbPanelBatch">
-                    <div class="batch-tools-grid">
-                        <div class="batch-card">
-                            <div class="card-heading">Bulk Asset Export to Disk Directory</div>
-                            <p class="batch-desc">Export all sprites, audio streams, JSON trees, or raw .img files under the currently selected Archive, Directory, or .img node.</p>
-                            <div class="batch-form-row">
-                                <input type="text" id="batchOutputDirInput" class="input-full" placeholder="/path/to/export/folder" />
-                                <select id="batchExportModeSelect" class="select-compact">
-                                    <option value="Png">PNG Sprites (.png)</option>
-                                    <option value="Sound">Sound_DX8 Audio (.wav / .mp3)</option>
-                                    <option value="Json">JSON Property Trees (.json)</option>
-                                    <option value="Img">Raw WZ Images (.img)</option>
-                                    <option value="All">All Sprites + Audio</option>
-                                </select>
-                                <button type="button" class="cmd-btn primary" id="btnRunBatchExport">Run Bulk Export</button>
-                            </div>
-                        </div>
-
-                        <div class="batch-card">
-                            <div class="card-heading">Repack &amp; Outlink Maintenance</div>
-                            <p class="batch-desc">Resolve external <code>_outlink</code> and internal <code>_inlink</code> references across open <code>_Canvas</code> archives and bake standalone pixel payloads directly into the target archive.</p>
-                            <div class="batch-form-row">
-                                <button type="button" class="cmd-btn accent" id="btnBatchInlineSelected">Inline Links in Selected Scope</button>
-                                <button type="button" class="cmd-btn" id="btnBatchDownloadWz">Download Repacked .wz Archive</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tab 5: Console Logs -->
+                <!-- Tab 4: Console Logs -->
                 <div class="wb-panel" id="wbPanelLogs">
                     <div class="logs-toolbar">
                         <span class="logs-hint">Real-time WZ parser, canvas codec, and repacker telemetry</span>
@@ -490,7 +456,6 @@
         <button type="button" data-ctx="duplicate">Duplicate <kbd>Ctrl+D</kbd></button>
         <button type="button" data-ctx="rename">Rename <kbd>F2</kbd></button>
         <div class="menu-sep"></div>
-        <button type="button" data-ctx="inlineLinks">Inline _outlink / _inlink Sprites</button>
         <button type="button" data-ctx="exportAuto" id="ctxExportBtn">Export Node...</button>
         <div class="menu-sep"></div>
         <button type="button" data-ctx="restore" id="ctxRestoreBtn" class="restore-item hidden">Restore Node</button>

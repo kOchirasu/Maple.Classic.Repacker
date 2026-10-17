@@ -299,6 +299,31 @@ public sealed class RepackerEngineTests {
         (bool delAgainOk, string? delAgainErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
         Assert.True(delAgainOk, delAgainErr);
 
+        // 6b. Delete an .img node and verify CanUndo / Undo / Redo restores and re-deletes the .img node
+        (bool delImgOk, string? delImgErr, _) = workspace.DeleteNode(charArchiveId, "Coat/01040000.img");
+        Assert.True(delImgOk, delImgErr);
+
+        NodeInspectionDto deletedImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
+        Assert.True(deletedImgInspect.Ok, deletedImgInspect.Error);
+        Assert.Equal(RepackerChangeState.Deleted, deletedImgInspect.ChangeState);
+        Assert.True(deletedImgInspect.CanUndo);
+
+        (bool undoImgOk, string? undoImgErr) = workspace.Undo(charArchiveId, "Coat/01040000.img");
+        Assert.True(undoImgOk, undoImgErr);
+
+        NodeInspectionDto restoredImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
+        Assert.True(restoredImgInspect.Ok, restoredImgInspect.Error);
+        Assert.NotEqual(RepackerChangeState.Deleted, restoredImgInspect.ChangeState);
+        Assert.True(restoredImgInspect.CanRedo);
+
+        (bool redoImgOk, string? redoImgErr) = workspace.Redo(charArchiveId, "Coat/01040000.img");
+        Assert.True(redoImgOk, redoImgErr);
+        Assert.Equal(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
+
+        (bool undoImgAgainOk, string? undoImgAgainErr) = workspace.Undo(charArchiveId, "Coat/01040000.img");
+        Assert.True(undoImgAgainOk, undoImgAgainErr);
+        Assert.NotEqual(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
+
         // 7. Global search across archives
         SearchResultItemDto[] hits = workspace.Search(new SearchQueryDto {
             Query = "Snail",

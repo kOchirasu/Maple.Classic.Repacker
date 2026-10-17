@@ -290,6 +290,21 @@ public class Program {
 #endif
                 }
 
+                case "workspace.browseDirectory": {
+#if WINDOWS
+                    string? initialDir = settingsStore.GetRecentPaths().FirstOrDefault();
+                    string? directoryPath = WindowsDesktopShell.PickOpenDirectory(initialDir);
+                    if (string.IsNullOrWhiteSpace(directoryPath)) {
+                        return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
+                    }
+                    return (true, new RpcOperationResponse(
+                        Ok: true,
+                        Path: directoryPath));
+#else
+                    return (false, new RpcOperationResponse(false, "Native folder dialog is not supported on this platform."));
+#endif
+                }
+
                 case "workspace.browseAndOpenDirectory": {
 #if WINDOWS
                     string? initialDir = settingsStore.GetRecentPaths().FirstOrDefault();

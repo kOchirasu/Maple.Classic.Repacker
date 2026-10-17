@@ -731,8 +731,8 @@ public sealed class RepackerWorkspace : IDisposable {
                     dirNode.Children.Count,
                     0,
                     dirChangeState,
-                    false,
-                    false,
+                    session.CanUndo(norm),
+                    session.CanRedo(norm),
                     summaryJson,
                     [.. rows],
                     null,
@@ -1263,6 +1263,15 @@ public sealed class RepackerWorkspace : IDisposable {
 
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
             if (imgPath is null || string.IsNullOrEmpty(subPath)) {
+                VirtualFsNode? targetNode = session.ResolveVirtualNode(norm);
+                if (targetNode is null || targetNode.IsDeleted) {
+                    return (false, $"Could not delete node \"{norm}\".", string.Empty);
+                }
+                if (imgPath is not null) {
+                    session.RecordUndoSnapshot(imgPath);
+                } else {
+                    session.RecordDirectoryUndoSnapshot(norm);
+                }
                 if (!session.RemoveVirtualNode(norm)) {
                     return (false, $"Could not delete node \"{norm}\".", string.Empty);
                 }
@@ -1333,6 +1342,14 @@ public sealed class RepackerWorkspace : IDisposable {
 
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
             if (imgPath is null || string.IsNullOrEmpty(subPath)) {
+                if (!session.IsVirtualPathDeleted(norm)) {
+                    return (false, $"Node \"{norm}\" is not deleted or could not be restored.", string.Empty);
+                }
+                if (imgPath is not null) {
+                    session.RecordUndoSnapshot(imgPath);
+                } else {
+                    session.RecordDirectoryUndoSnapshot(norm);
+                }
                 if (!session.RestoreVirtualNode(norm)) {
                     return (false, $"Node \"{norm}\" is not deleted or could not be restored.", string.Empty);
                 }
@@ -1343,12 +1360,11 @@ public sealed class RepackerWorkspace : IDisposable {
             }
 
             try {
+                WzValue imgRoot = session.GetOrParseImage(imgPath);
+                session.RecordUndoSnapshot(imgPath);
                 if (session.IsVirtualPathDeleted(imgPath)) {
                     session.RestoreVirtualNode(imgPath);
                 }
-
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                session.RecordUndoSnapshot(imgPath);
 
                 (bool restored, string? restoredSubPath) = session.RestoreDeletedProperty(imgPath, imgRoot, subPath);
                 if (!restored) {
@@ -1811,14 +1827,15 @@ public sealed class RepackerWorkspace : IDisposable {
             if (session is null) {
                 return (false, $"Archive \"{archiveId}\" not found.");
             }
-            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null) {
-                return (false, "Select a node inside an .img file to undo.");
+            string norm = ArchiveSession.NormalizePath(path);
+            if (string.IsNullOrEmpty(norm)) {
+                return (false, "Select a node to undo.");
             }
-            if (!session.Undo(imgPath)) {
-                return (false, "Nothing to undo for this image.");
+            if (!session.Undo(norm)) {
+                return (false, "Nothing to undo for this node.");
             }
-            AppendLogUnsafe($"Undid last change in \"{imgPath}\".", RepackerLogLevel.Info);
+            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(norm);
+            AppendLogUnsafe($"Undid last change in \"{imgPath ?? norm}\".", RepackerLogLevel.Info);
             NotifyStateChanged();
             return (true, null);
         }
@@ -1830,14 +1847,15 @@ public sealed class RepackerWorkspace : IDisposable {
             if (session is null) {
                 return (false, $"Archive \"{archiveId}\" not found.");
             }
-            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null) {
-                return (false, "Select a node inside an .img file to redo.");
+            string norm = ArchiveSession.NormalizePath(path);
+            if (string.IsNullOrEmpty(norm)) {
+                return (false, "Select a node to redo.");
             }
-            if (!session.Redo(imgPath)) {
-                return (false, "Nothing to redo for this image.");
+            if (!session.Redo(norm)) {
+                return (false, "Nothing to redo for this node.");
             }
-            AppendLogUnsafe($"Redid change in \"{imgPath}\".", RepackerLogLevel.Info);
+            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(norm);
+            AppendLogUnsafe($"Redid change in \"{imgPath ?? norm}\".", RepackerLogLevel.Info);
             NotifyStateChanged();
             return (true, null);
         }
@@ -2715,13 +2733,14 @@ public sealed class RepackerWorkspace : IDisposable {
 
             bool kindMatches = !kindFilter.HasValue || kindFilter.Value == RepackerPropertyKind.None || kindFilter.Value == pKind;
             if (kindMatches) {
+                string searchableVal = GetSearchablePropertyValue(prop.Value, disp);
                 bool matches;
                 if (!string.IsNullOrEmpty(nameFilter) && string.IsNullOrEmpty(valFilter)) {
                     matches = MatchesText(prop.Name, fullPath, nameFilter, exact, cmp)
-                        || MatchesSingleText(disp, nameFilter, exact, cmp);
+                        || (!string.IsNullOrEmpty(searchableVal) && MatchesSingleText(searchableVal, nameFilter, exact, cmp));
                 } else {
                     bool nameMatches = string.IsNullOrEmpty(nameFilter) || MatchesText(prop.Name, fullPath, nameFilter, exact, cmp);
-                    bool valMatches = string.IsNullOrEmpty(valFilter) || MatchesSingleText(disp, valFilter, exact, cmp);
+                    bool valMatches = string.IsNullOrEmpty(valFilter) || (!string.IsNullOrEmpty(searchableVal) && MatchesSingleText(searchableVal, valFilter, exact, cmp));
                     matches = nameMatches && valMatches && (!string.IsNullOrEmpty(nameFilter) || !string.IsNullOrEmpty(valFilter) || kindFilter.HasValue);
                 }
                 if (matches) {
@@ -2742,6 +2761,12 @@ public sealed class RepackerWorkspace : IDisposable {
             }
         }
     }
+
+    private static string GetSearchablePropertyValue(WzValue val, string displayValue) => val switch {
+        WzValue.Short or WzValue.Int or WzValue.Long or WzValue.Float or WzValue.Double or WzValue.String or WzValue.Vector => displayValue,
+        WzValue.Uol(var uolStr) => uolStr,
+        _ => string.Empty,
+    };
 
     private static bool MatchesText(string name, string fullPath, string filter, bool exact, StringComparison cmp) {
         if (string.IsNullOrEmpty(filter)) return true;

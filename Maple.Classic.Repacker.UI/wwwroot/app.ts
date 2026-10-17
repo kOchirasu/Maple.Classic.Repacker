@@ -94,6 +94,8 @@ namespace MapleRepacker {
         private ctxTargetArchiveId = '';
         private ctxTargetPath = '';
         private modalCancelCallback: (() => void) | null = null;
+        private lastBulkExportDir = '';
+        private lastBulkExportMode: RepackerBatchExportMode = RepackerBatchExportMode.Png;
 
         constructor() {
             this.spriteCanvas = document.getElementById('spriteCanvas') as HTMLCanvasElement;
@@ -301,10 +303,12 @@ namespace MapleRepacker {
             await this.fetchTreeChildren(archiveId, '');
             const parts = path.split('/').filter((p) => p.length > 0);
             let accum = '';
-            for (const part of parts) {
+            for (let i = 0; i < parts.length; i++) {
+                const part = parts[i];
                 accum = accum ? `${accum}/${part}` : part;
                 const key = this.makeCacheKey(archiveId, accum);
-                if (this.treeState.expandedKeys.has(key) || accum === path) {
+                const isAncestor = i < parts.length - 1;
+                if (isAncestor || this.treeState.expandedKeys.has(key) || accum === path) {
                     await this.fetchTreeChildren(archiveId, accum);
                 }
             }
@@ -327,22 +331,51 @@ namespace MapleRepacker {
                 await this.fetchTreeChildren(archiveId, '');
             }
 
-            if (!targetPath) {
-                this.renderTree();
-                return;
-            }
-
-            const parts = targetPath.split('/').filter((p) => p.length > 0);
-            let accum = '';
-            for (let i = 0; i < parts.length - 1; i++) {
-                accum = accum ? `${accum}/${parts[i]}` : parts[i];
-                const key = this.makeCacheKey(archiveId, accum);
-                this.treeState.expandedKeys.add(key);
-                if (!this.treeState.childrenByParent.has(key)) {
-                    await this.fetchTreeChildren(archiveId, accum);
+            if (targetPath) {
+                const parts = targetPath.split('/').filter((p) => p.length > 0);
+                let accum = '';
+                for (let i = 0; i < parts.length - 1; i++) {
+                    accum = accum ? `${accum}/${parts[i]}` : parts[i];
+                    const key = this.makeCacheKey(archiveId, accum);
+                    this.treeState.expandedKeys.add(key);
+                    if (!this.treeState.childrenByParent.has(key)) {
+                        await this.fetchTreeChildren(archiveId, accum);
+                    }
                 }
             }
+
             this.renderTree();
+
+            if (this.treeFilterText.trim().length > 0) {
+                const container = document.getElementById('treeContainer');
+                if (container && !container.querySelector('.tree-row.selected')) {
+                    this.treeFilterText = '';
+                    const filterInput = document.getElementById('treeFilterInput') as HTMLInputElement | null;
+                    if (filterInput) {
+                        filterInput.value = '';
+                    }
+                    this.renderTree();
+                }
+            }
+
+            this.scrollSelectedTreeRowIntoView();
+        }
+
+        private scrollSelectedTreeRowIntoView(): void {
+            const container = document.getElementById('treeContainer');
+            if (!container) return;
+            const selectedRow = container.querySelector('.tree-row.selected') as HTMLElement | null;
+            if (!selectedRow) return;
+
+            const containerRect = container.getBoundingClientRect();
+            const rowRect = selectedRow.getBoundingClientRect();
+            if (containerRect.height <= 0) return;
+
+            if (rowRect.top < containerRect.top + 24 || rowRect.bottom > containerRect.bottom - 24) {
+                const rowOffsetInContainer = rowRect.top - containerRect.top + container.scrollTop;
+                const targetScrollTop = rowOffsetInContainer - containerRect.height / 2 + rowRect.height / 2;
+                container.scrollTop = Math.max(0, Math.round(targetScrollTop));
+            }
         }
 
         private renderTree(): void {
@@ -424,10 +457,7 @@ namespace MapleRepacker {
                 const cachedKids = this.treeState.childrenByParent.get(nodeKey) || [];
 
                 if (filterLower) {
-                    const selfMatches =
-                        node.name.toLowerCase().includes(filterLower) ||
-                        node.displayValue.toLowerCase().includes(filterLower) ||
-                        node.path.toLowerCase().includes(filterLower);
+                    const selfMatches = this.nodeMatchesTreeFilter(node, filterLower);
                     const descendantMatches = this.hasMatchingDescendant(archiveId, cachedKids, filterLower);
                     if (!selfMatches && !descendantMatches) {
                         continue;
@@ -491,12 +521,40 @@ namespace MapleRepacker {
             }
         }
 
+        private getFilterableNodeValue(node: TreeNodeDto): string {
+            if (node.nodeKind !== RepackerNodeKind.Property) {
+                return '';
+            }
+            switch (node.propertyKind) {
+                case RepackerPropertyKind.Short:
+                case RepackerPropertyKind.Int:
+                case RepackerPropertyKind.Long:
+                case RepackerPropertyKind.Float:
+                case RepackerPropertyKind.Double:
+                case RepackerPropertyKind.String:
+                case RepackerPropertyKind.Vector:
+                    return node.displayValue || '';
+                case RepackerPropertyKind.Uol:
+                    return (node.displayValue || '').replace(/^->\s*/, '');
+                default:
+                    return '';
+            }
+        }
+
+        private nodeMatchesTreeFilter(node: TreeNodeDto, filterLower: string): boolean {
+            if (node.name.toLowerCase().includes(filterLower)) {
+                return true;
+            }
+            if (filterLower.includes('/') && node.path.toLowerCase().includes(filterLower)) {
+                return true;
+            }
+            const val = this.getFilterableNodeValue(node);
+            return val.length > 0 && val.toLowerCase().includes(filterLower);
+        }
+
         private hasMatchingDescendant(archiveId: string, nodes: TreeNodeDto[], filterLower: string): boolean {
             for (const n of nodes) {
-                if (
-                    n.name.toLowerCase().includes(filterLower) ||
-                    n.displayValue.toLowerCase().includes(filterLower)
-                ) {
+                if (this.nodeMatchesTreeFilter(n, filterLower)) {
                     return true;
                 }
                 const kids = this.treeState.childrenByParent.get(this.makeCacheKey(archiveId, n.path));
@@ -1546,7 +1604,6 @@ namespace MapleRepacker {
             // Toolbar buttons
             document.getElementById('btnUndo')!.addEventListener('click', () => void this.undoSelectedImage());
             document.getElementById('btnRedo')!.addEventListener('click', () => void this.redoSelectedImage());
-            document.getElementById('btnInlineLinks')!.addEventListener('click', () => void this.inlineLinksInCurrentScope());
 
             // Hidden browser file input handlers
             const wzInput = document.getElementById('hiddenWzFileInput') as HTMLInputElement;
@@ -1653,6 +1710,12 @@ namespace MapleRepacker {
                 case MenuBarAction.DownloadArchive:
                     void this.downloadCurrentArchive();
                     break;
+                case MenuBarAction.OpenBulkExportModal:
+                    this.openBulkExportModal();
+                    break;
+                case MenuBarAction.OpenInlineOutlinksModal:
+                    this.openInlineOutlinksModal();
+                    break;
                 case MenuBarAction.CloseActiveArchive:
                     void this.closeActiveArchive();
                     break;
@@ -1688,12 +1751,6 @@ namespace MapleRepacker {
                     break;
                 case MenuBarAction.FocusGlobalSearch:
                     this.focusGlobalSearch();
-                    break;
-                case MenuBarAction.InlineOutlinksNode:
-                    void this.inlineLinksInCurrentScope();
-                    break;
-                case MenuBarAction.OpenBatchExportTab:
-                    this.activateWorkbenchTab(RepackerWorkbenchTab.Batch);
                     break;
                 case MenuBarAction.ExportSelectedJson:
                     void this.exportCurrentNode(RepackerExportFormat.Json);
@@ -1837,9 +1894,6 @@ namespace MapleRepacker {
                     break;
                 case TreeContextMenuCommand.Rename:
                     this.openRenameModal();
-                    break;
-                case TreeContextMenuCommand.InlineLinks:
-                    await this.inlineLinksInCurrentScope();
                     break;
                 case TreeContextMenuCommand.ExportAuto:
                     if (!targetPath) {
@@ -2063,10 +2117,6 @@ namespace MapleRepacker {
 
             document.getElementById('btnExportPng')!.addEventListener('click', () => {
                 void this.exportCurrentNode(RepackerExportFormat.Png);
-            });
-
-            document.getElementById('btnInlineCurrentCanvas')!.addEventListener('click', () => {
-                void this.inlineLinksInCurrentScope();
             });
 
             document.getElementById('btnJumpToLinkedTarget')!.addEventListener('click', () => {
@@ -2293,36 +2343,6 @@ namespace MapleRepacker {
                 if (ev.key === 'Enter') void runSearch();
             });
 
-            // Batch Tools
-            document.getElementById('btnRunBatchExport')!.addEventListener('click', async () => {
-                const outDir = (document.getElementById('batchOutputDirInput') as HTMLInputElement).value.trim();
-                const mode =
-                    ((document.getElementById('batchExportModeSelect') as HTMLSelectElement).value as RepackerBatchExportMode) ||
-                    RepackerBatchExportMode.Png;
-                if (!outDir) {
-                    this.showToast('Enter a target output directory path', ToastKind.Error);
-                    return;
-                }
-                const res = await rpcCall<RpcOperationResponse>('node.batchExport', {
-                    archiveId: this.selectedArchiveId,
-                    path: this.selectedPath,
-                    outputDirectory: outDir,
-                    mode,
-                });
-                if (res.ok) {
-                    this.showToast(`Batch-exported ${res.data.count ?? 0} file(s) to ${outDir}`, ToastKind.Success);
-                } else {
-                    this.showToast(res.data?.error || 'Batch export failed', ToastKind.Error);
-                }
-            });
-
-            document.getElementById('btnBatchInlineSelected')!.addEventListener('click', () => {
-                void this.inlineLinksInCurrentScope();
-            });
-            document.getElementById('btnBatchDownloadWz')!.addEventListener('click', () => {
-                void this.downloadCurrentArchive();
-            });
-
             // Clear logs
             document.getElementById('btnClearLogs')!.addEventListener('click', () => {
                 void rpcCall('logs.clear', {});
@@ -2330,6 +2350,9 @@ namespace MapleRepacker {
         }
 
         private activateWorkbenchTab(tabId: RepackerWorkbenchTab, expandIfCollapsed = true): void {
+            if (tabId === RepackerWorkbenchTab.Batch) {
+                tabId = RepackerWorkbenchTab.Json;
+            }
             if (expandIfCollapsed && this.layout.isWorkbenchCollapsed()) {
                 this.layout.toggleWorkbench(false);
             }
@@ -2337,15 +2360,16 @@ namespace MapleRepacker {
                 btn.classList.toggle('active', (btn as HTMLElement).dataset.tab === tabId);
             });
 
-            const panelMap: Record<RepackerWorkbenchTab, string> = {
+            const panelMap: Partial<Record<RepackerWorkbenchTab, string>> = {
                 [RepackerWorkbenchTab.Json]: 'wbPanelJson',
                 [RepackerWorkbenchTab.Search]: 'wbPanelSearch',
                 [RepackerWorkbenchTab.Hex]: 'wbPanelHex',
-                [RepackerWorkbenchTab.Batch]: 'wbPanelBatch',
                 [RepackerWorkbenchTab.Logs]: 'wbPanelLogs',
             };
             Object.entries(panelMap).forEach(([k, id]) => {
-                document.getElementById(id)?.classList.toggle('active', k === tabId);
+                if (id) {
+                    document.getElementById(id)?.classList.toggle('active', k === tabId);
+                }
             });
 
             document.getElementById('wbJsonActions')!.classList.toggle('hidden', tabId !== RepackerWorkbenchTab.Json);
@@ -3195,6 +3219,147 @@ namespace MapleRepacker {
                 } else {
                     this.showToast(res.data?.error || 'Failed to save archive to disk', ToastKind.Error);
                 }
+            });
+        }
+
+        private openBulkExportModal(): void {
+            const currentAr = this.archives.find((a) => a.archiveId === this.selectedArchiveId);
+            if (!currentAr) {
+                this.showToast('No WZ archive is currently selected', ToastKind.Error);
+                return;
+            }
+
+            const scopeLabel = this.selectedPath
+                ? `${currentAr.name} / ${this.selectedPath}`
+                : `${currentAr.name} (Entire Archive)`;
+            const browseBtnHtml = this.supportsNativeDialogs
+                ? `<button type="button" class="cmd-btn" id="btnModalBrowseExportDir" style="flex-shrink: 0;">Browse...</button>`
+                : '';
+
+            this.showModal(
+                'Bulk Asset Export to Directory',
+                `
+                <div class="form-row">
+                    <label>Export Scope (Selected Tree Node)</label>
+                    <div style="padding: 6px 10px; background: var(--bg-surface-2); border: 1px solid var(--border-subtle); border-radius: 4px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); word-break: break-all;">
+                        ${this.escapeHtml(scopeLabel)}
+                    </div>
+                </div>
+                <div class="form-row">
+                    <label>Export Format</label>
+                    <select id="modalBulkExportMode" class="select-full">
+                        <option value="${RepackerBatchExportMode.Png}">All Canvas Sprites (.png)</option>
+                        <option value="${RepackerBatchExportMode.Sound}">All Sound_DX8 Audio (.wav / .mp3)</option>
+                        <option value="${RepackerBatchExportMode.Json}">All Subtrees / Images (.json)</option>
+                        <option value="${RepackerBatchExportMode.Img}">All WZ Images (.img)</option>
+                        <option value="${RepackerBatchExportMode.All}">Everything (.png + audio + .json)</option>
+                    </select>
+                </div>
+                <div class="form-row">
+                    <label>Target Output Directory</label>
+                    <div style="display: flex; gap: 6px; align-items: center;">
+                        <input type="text" id="modalBulkExportDir" class="input-full" value="${this.escapeHtml(this.lastBulkExportDir)}" placeholder="C:\\Exports\\MapleAssets" />
+                        ${browseBtnHtml}
+                    </div>
+                </div>
+                `,
+                `
+                <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
+                <button type="button" class="cmd-btn primary" id="btnModalConfirmBulkExport">Run Bulk Export</button>
+                `
+            );
+
+            const modeSel = document.getElementById('modalBulkExportMode') as HTMLSelectElement;
+            modeSel.value = this.lastBulkExportMode;
+
+            const dirInput = document.getElementById('modalBulkExportDir') as HTMLInputElement;
+            const browseBtn = document.getElementById('btnModalBrowseExportDir');
+            if (browseBtn) {
+                browseBtn.addEventListener('click', async () => {
+                    const res = await rpcCall<RpcOperationResponse>('workspace.browseDirectory', {});
+                    if (res.ok && res.data?.path) {
+                        dirInput.value = res.data.path;
+                    }
+                });
+            }
+
+            document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
+            document.getElementById('btnModalConfirmBulkExport')!.addEventListener('click', async () => {
+                const outDir = dirInput.value.trim();
+                const mode = (modeSel.value as RepackerBatchExportMode) || RepackerBatchExportMode.Png;
+                if (!outDir) {
+                    this.showToast('Enter a target output directory path', ToastKind.Error);
+                    return;
+                }
+
+                this.lastBulkExportDir = outDir;
+                this.lastBulkExportMode = mode;
+
+                const confirmBtn = document.getElementById('btnModalConfirmBulkExport') as HTMLButtonElement;
+                confirmBtn.disabled = true;
+
+                const res = await rpcCall<RpcOperationResponse>('node.batchExport', {
+                    archiveId: this.selectedArchiveId,
+                    path: this.selectedPath,
+                    outputDirectory: outDir,
+                    mode,
+                });
+                confirmBtn.disabled = false;
+
+                if (res.ok) {
+                    this.closeModal();
+                    this.showToast(`Batch-exported ${res.data.count ?? 0} file(s) to ${outDir}`, ToastKind.Success);
+                } else {
+                    this.showToast(res.data?.error || 'Batch export failed', ToastKind.Error);
+                }
+            });
+        }
+
+        private openInlineOutlinksModal(): void {
+            const currentAr = this.archives.find((a) => a.archiveId === this.selectedArchiveId);
+            if (!currentAr) {
+                this.showToast('No WZ archive is currently selected', ToastKind.Error);
+                return;
+            }
+
+            const scopeLabel = this.selectedPath
+                ? `${currentAr.name} / ${this.selectedPath}`
+                : `${currentAr.name} (Entire Archive)`;
+
+            this.showModal(
+                'Export / Inline _outlink & _inlink Sprites',
+                `
+                <p style="margin: 0 0 10px; color: var(--text-secondary); font-size: 12px; line-height: 1.5;">
+                    Resolves external <code>_outlink</code> and internal <code>_inlink</code> sprite references within the selected scope by baking their target pixel data directly into the Canvas nodes, making the archive or image self-contained.
+                </p>
+                <div class="form-row">
+                    <label>Target Scope</label>
+                    <div style="padding: 6px 10px; background: var(--bg-surface-2); border: 1px solid var(--border-subtle); border-radius: 4px; font-family: var(--font-mono); font-size: 11.5px; color: var(--text-primary); word-break: break-all;">
+                        ${this.escapeHtml(scopeLabel)}
+                    </div>
+                </div>
+                `,
+                `
+                <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
+                <button type="button" class="cmd-btn" id="btnModalInlineOnly">Inline in Workspace</button>
+                <button type="button" class="cmd-btn primary" id="btnModalInlineAndExport">Inline &amp; Export .wz</button>
+                `
+            );
+
+            document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
+            document.getElementById('btnModalInlineOnly')!.addEventListener('click', async () => {
+                this.closeModal();
+                await this.inlineLinksInCurrentScope();
+            });
+            document.getElementById('btnModalInlineAndExport')!.addEventListener('click', async () => {
+                const inlineBtn = document.getElementById('btnModalInlineOnly') as HTMLButtonElement;
+                const exportBtn = document.getElementById('btnModalInlineAndExport') as HTMLButtonElement;
+                inlineBtn.disabled = true;
+                exportBtn.disabled = true;
+
+                await this.inlineLinksInCurrentScope();
+                this.closeModal();
+                await this.downloadCurrentArchive();
             });
         }
 
