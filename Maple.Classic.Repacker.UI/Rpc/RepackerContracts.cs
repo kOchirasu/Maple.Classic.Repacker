@@ -11,7 +11,8 @@ public sealed record WorkspaceStatusPayloadDto(
     ClipboardStateDto Clipboard,
     RepackerLogEntry[] Logs,
     SavedRepackerUiStateDto UiState,
-    string[] RecentPaths);
+    string[] RecentPaths,
+    bool SupportsNativeDialogs = false);
 
 public sealed record RpcOperationResponse(
     bool Ok = true,
@@ -22,7 +23,9 @@ public sealed record RpcOperationResponse(
     ArchiveSummaryDto? Archive = null,
     ArchiveSummaryDto[]? Archives = null,
     ClipboardStateDto? Clipboard = null,
-    WorkspaceStatusPayloadDto? Status = null);
+    WorkspaceStatusPayloadDto? Status = null,
+    bool Cancelled = false,
+    string[]? FilePaths = null);
 
 public sealed record TreeChildrenResponse(
     bool Ok,

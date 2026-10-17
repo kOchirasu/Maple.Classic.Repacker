@@ -151,6 +151,23 @@ public sealed class RepackerWorkspace : IDisposable {
         WzArchive wz = WzArchive.FromBytes(data, stem, version);
 
         lock (syncLock) {
+            ArchiveSession? existing = archives.Find(a =>
+                (!string.IsNullOrWhiteSpace(filePath) &&
+                 !string.IsNullOrEmpty(a.FilePath) &&
+                 string.Equals(a.FilePath, filePath, StringComparison.OrdinalIgnoreCase)) ||
+                string.Equals(a.Name, cleanName, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null) {
+                int idx = archives.IndexOf(existing);
+                existing.Dispose();
+                var replacement = new ArchiveSession(existing.ArchiveId, cleanName, filePath ?? string.Empty, wz, version);
+                archives[idx] = replacement;
+                SelectedArchiveId = replacement.ArchiveId;
+                SelectedNodePath = string.Empty;
+                AppendLogUnsafe($"Reloaded archive \"{cleanName}\" ({data.Length:N0} bytes, v{wz.Version}).", RepackerLogLevel.Success);
+                NotifyStateChanged();
+                return replacement.ToSummaryDto();
+            }
+
             string id = $"wz_{nextArchiveSeq++}";
             var session = new ArchiveSession(id, cleanName, filePath ?? string.Empty, wz, version);
             archives.Add(session);
@@ -214,6 +231,7 @@ public sealed class RepackerWorkspace : IDisposable {
             string id = $"wz_{nextArchiveSeq++}";
             var session = new ArchiveSession(id, cleanName, string.Empty, wz) {
                 HasStructureChanges = true,
+                IsUserCreatedArchive = true,
             };
             archives.Add(session);
             SelectedArchiveId = id;
@@ -343,6 +361,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     string childPath = string.IsNullOrEmpty(norm) ? child.Name : $"{norm}/{child.Name}";
                     if (child.IsDir) {
                         (int d, int i) = ArchiveSession.CountVirtualRecursive(child);
+                        (bool dirModified, bool dirAdded) = session.GetDirectoryChangeState(childPath, child);
                         result.Add(new TreeNodeDto(
                             session.ArchiveId,
                             childPath,
@@ -353,9 +372,13 @@ public sealed class RepackerWorkspace : IDisposable {
                             "DIR",
                             child.Children.Count > 0,
                             child.Children.Count,
-                            session.IsPathModified(childPath)));
+                            dirModified,
+                            0,
+                            dirAdded));
                     } else {
                         int sizeBytes = session.GetImageSize(childPath);
+                        bool imgAdded = session.IsImageAdded(childPath);
+                        bool imgMod = !imgAdded && session.IsImageModified(childPath);
                         result.Add(new TreeNodeDto(
                             session.ArchiveId,
                             childPath,
@@ -366,8 +389,9 @@ public sealed class RepackerWorkspace : IDisposable {
                             "IMG",
                             true,
                             0,
-                            session.IsImageModified(childPath),
-                            sizeBytes));
+                            imgMod,
+                            sizeBytes,
+                            imgAdded));
                     }
                 }
                 return [.. result];
@@ -381,16 +405,15 @@ public sealed class RepackerWorkspace : IDisposable {
                     return [];
                 }
 
-                bool imgModified = session.IsImageModified(imgPath);
                 if (target is WzValue.Convex(var convexItems)) {
                     var convexNodes = new List<TreeNodeDto>(convexItems.Count);
                     for (int i = 0; i < convexItems.Count; i++) {
                         WzValue item = convexItems[i];
                         string itemName = i.ToString(CultureInfo.InvariantCulture);
-                        string itemPath = string.IsNullOrEmpty(subPath)
-                            ? $"{imgPath}/{itemName}"
-                            : $"{imgPath}/{subPath}/{itemName}";
-                        convexNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, itemPath, itemName, item, imgModified));
+                        string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
+                        string itemPath = $"{imgPath}/{itemSubPath}";
+                        (bool itemMod, bool itemAdded) = EvaluatePropertyChangeState(session, imgPath, itemSubPath, item);
+                        convexNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, itemPath, itemName, item, itemMod, itemAdded));
                     }
                     return [.. convexNodes];
                 }
@@ -402,10 +425,10 @@ public sealed class RepackerWorkspace : IDisposable {
 
                 var propNodes = new List<TreeNodeDto>(props.Count);
                 foreach (WzProperty prop in props) {
-                    string propPath = string.IsNullOrEmpty(subPath)
-                        ? $"{imgPath}/{prop.Name}"
-                        : $"{imgPath}/{subPath}/{prop.Name}";
-                    propNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, propPath, prop.Name, prop.Value, imgModified));
+                    string propSubPath = string.IsNullOrEmpty(subPath) ? prop.Name : $"{subPath}/{prop.Name}";
+                    string propPath = $"{imgPath}/{propSubPath}";
+                    (bool propMod, bool propAdded) = EvaluatePropertyChangeState(session, imgPath, propSubPath, prop.Value);
+                    propNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, propPath, prop.Name, prop.Value, propMod, propAdded));
                 }
                 return [.. propNodes];
             } catch {
@@ -485,6 +508,10 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
                 """;
 
+                (bool dirMod, bool dirAdded) = isRoot
+                    ? (!session.IsUserCreatedArchive && session.IsModified, session.IsUserCreatedArchive)
+                    : session.GetDirectoryChangeState(norm, dirNode);
+
                 return new NodeInspectionDto(
                     true,
                     null,
@@ -503,7 +530,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     null,
                     dirNode.Children.Count,
                     0,
-                    session.IsPathModified(norm),
+                    dirMod,
                     false,
                     false,
                     summaryJson,
@@ -512,7 +539,8 @@ public sealed class RepackerWorkspace : IDisposable {
                     [],
                     null,
                     null,
-                    []);
+                    [],
+                    dirAdded);
             }
 
             // Case 2: Image node or Property inside an Image
@@ -612,6 +640,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     : rawSlice.Length;
 
                 string jsonPreview = target.ToJson();
+                (bool nodeMod, bool nodeAdded) = EvaluatePropertyChangeState(session, imgPath, subPath, target);
 
                 return new NodeInspectionDto(
                     true,
@@ -631,7 +660,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     vecDto,
                     childRows.Length,
                     sizeBytes,
-                    session.IsImageModified(imgPath),
+                    nodeMod,
                     session.CanUndo(imgPath),
                     session.CanRedo(imgPath),
                     jsonPreview,
@@ -640,7 +669,8 @@ public sealed class RepackerWorkspace : IDisposable {
                     animFrames,
                     soundDto,
                     resolvedUolPath,
-                    rawSlice);
+                    rawSlice,
+                    nodeAdded);
             } catch (Exception ex) {
                 return ErrorInspection(archiveId, norm, ex.Message);
             }
@@ -2117,12 +2147,37 @@ public sealed class RepackerWorkspace : IDisposable {
         };
     }
 
+    private static (bool IsModified, bool IsAdded) EvaluatePropertyChangeState(
+        ArchiveSession session,
+        string imgPath,
+        string propSubPath,
+        WzValue propVal) {
+        if (session.IsImageAdded(imgPath)) {
+            return (false, true);
+        }
+        if (!session.IsImageModified(imgPath)) {
+            return (false, false);
+        }
+        if (!session.TryGetBaselineImage(imgPath, out WzValue? baselineRoot) || baselineRoot is null) {
+            return (true, false);
+        }
+        if (string.IsNullOrEmpty(propSubPath)) {
+            return (!propVal.Equals(baselineRoot), false);
+        }
+        WzValue? origProp = ResolvePropertyNode(baselineRoot, propSubPath);
+        if (origProp is null) {
+            return (false, true);
+        }
+        return (!propVal.Equals(origProp), false);
+    }
+
     private static TreeNodeDto BuildPropertyTreeNodeDto(
         string archiveId,
         string path,
         string name,
         WzValue val,
-        bool isModified) {
+        bool isModified,
+        bool isAdded = false) {
         (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(val);
         int childCount = val switch {
             WzValue.Object(var p) => p.Count,
@@ -2148,7 +2203,8 @@ public sealed class RepackerWorkspace : IDisposable {
             childCount > 0,
             childCount,
             isModified,
-            sizeBytes);
+            sizeBytes,
+            isAdded);
     }
 
     private static SubPropertyRowDto[] BuildChildRows(string imgPath, string subPath, WzValue target) {

@@ -22,7 +22,7 @@
                 <div class="menu-item" data-menu="file">
                     <button type="button" class="menu-trigger">File</button>
                     <div class="menu-dropdown">
-                        <button type="button" data-action="openFileModal">Open .wz File or Upload... <kbd>Ctrl+O</kbd></button>
+                        <button type="button" data-action="openFileModal">Open .wz File... <kbd>Ctrl+O</kbd></button>
                         <button type="button" data-action="openDirModal">Open Data Directory...</button>
                         <button type="button" data-action="newArchiveModal">New Empty .wz Archive...</button>
                         <div class="menu-sep"></div>
@@ -91,10 +91,6 @@
 
             <div class="status-cluster">
                 <span class="clipboard-pill hidden" id="clipboardPill" title="Copied node in clipboard"></span>
-                <span class="conn-badge connected" id="connBadge">
-                    <span class="conn-dot"></span>
-                    <span id="connText">Engine Ready</span>
-                </span>
             </div>
         </header>
 
@@ -111,9 +107,6 @@
                         <button type="button" class="icon-btn" id="btnCollapseAll" title="Collapse all expanded nodes">Collapse</button>
                     </div>
                 </div>
-
-                <!-- Archive Switcher Strip -->
-                <div class="archive-tabs-strip" id="archiveTabsStrip"></div>
 
                 <!-- Tree Filter Input -->
                 <div class="tree-filter-bar">
@@ -452,7 +445,7 @@
     </div>
 
     <!-- Hidden File Inputs for Browser Uploads -->
-    <input type="file" id="hiddenWzFileInput" accept=".wz" class="hidden" />
+    <input type="file" id="hiddenWzFileInput" accept=".wz" multiple class="hidden" />
     <input type="file" id="hiddenPngFileInput" accept=".png,image/png" class="hidden" />
     <input type="file" id="hiddenAudioFileInput" accept=".mp3,.wav,audio/*" class="hidden" />
     <input type="file" id="hiddenImgFileInput" accept=".img,.json" class="hidden" />

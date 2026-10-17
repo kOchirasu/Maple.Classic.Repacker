@@ -56,6 +56,7 @@ namespace MapleRepacker {
         imageCount: number;
         modifiedImageCount: number;
         isModified: boolean;
+        isAdded?: boolean;
     }
 
     export interface TreeNodeDto {
@@ -70,6 +71,7 @@ namespace MapleRepacker {
         childCount: number;
         isModified: boolean;
         sizeBytes: number;
+        isAdded?: boolean;
     }
 
     export interface SubPropertyRowDto {
@@ -165,6 +167,7 @@ namespace MapleRepacker {
         sound?: SoundPreviewDto | null;
         resolvedUolTargetPath?: string | null;
         rawBinarySlice: Uint8Array | number[];
+        isAdded?: boolean;
     }
 
     export interface SearchResultItemDto {
@@ -214,6 +217,7 @@ namespace MapleRepacker {
         logs: RepackerLogEntry[];
         uiState?: SavedRepackerUiStateDto | null;
         recentPaths: string[];
+        supportsNativeDialogs?: boolean;
     }
 
     export interface RpcOperationResponse {
@@ -226,6 +230,8 @@ namespace MapleRepacker {
         archives?: ArchiveSummaryDto[] | null;
         clipboard?: ClipboardStateDto | null;
         status?: WorkspaceStatusPayloadDto | null;
+        cancelled?: boolean;
+        filePaths?: string[] | null;
     }
 
     export interface TreeChildrenResponse {

@@ -47,6 +47,7 @@ namespace MapleRepacker {
         private selectedPath = '';
         private currentInspection: NodeInspectionDto | null = null;
         private recentPaths: string[] = [];
+        private supportsNativeDialogs = false;
         private treeFilterText = '';
         private appliedInitialUiState = false;
 
@@ -81,6 +82,7 @@ namespace MapleRepacker {
         // Context Menu Target
         private ctxTargetArchiveId = '';
         private ctxTargetPath = '';
+        private modalCancelCallback: (() => void) | null = null;
 
         constructor() {
             this.spriteCanvas = document.getElementById('spriteCanvas') as HTMLCanvasElement;
@@ -100,7 +102,6 @@ namespace MapleRepacker {
             this.bindWorkbenchEvents();
             this.bindKeyboardShortcuts();
 
-            onRpcConnectionChange((connected) => this.updateConnectionBadge(connected));
             onRpcStatus((status) => void this.handleWorkspaceStatus(status));
             ensureRpcSocket();
         }
@@ -112,20 +113,6 @@ namespace MapleRepacker {
                 initialValue: '{\n  "//": "Select an .img or property node to inspect & edit JSON"\n}',
                 onSave: () => void this.applyJsonFromEditor(),
             });
-        }
-
-        private updateConnectionBadge(connected: boolean): void {
-            const badge = document.getElementById('connBadge')!;
-            const text = document.getElementById('connText')!;
-            if (connected) {
-                badge.classList.remove('disconnected');
-                badge.classList.add('connected');
-                text.textContent = 'Engine Ready';
-            } else {
-                badge.classList.remove('connected');
-                badge.classList.add('disconnected');
-                text.textContent = 'Reconnecting...';
-            }
         }
 
         private showToast(message: string, kind: 'info' | 'success' | 'error' = 'info'): void {
@@ -143,6 +130,7 @@ namespace MapleRepacker {
         private async handleWorkspaceStatus(status: WorkspaceStatusPayloadDto): Promise<void> {
             this.archives = status.archives || [];
             this.recentPaths = status.recentPaths || [];
+            this.supportsNativeDialogs = Boolean(status.supportsNativeDialogs);
 
             if (!this.appliedInitialUiState && status.uiState) {
                 this.appliedInitialUiState = true;
@@ -166,7 +154,6 @@ namespace MapleRepacker {
             // Update archive count & search dropdown
             const countBadge = document.getElementById('archiveCountBadge')!;
             countBadge.textContent = `${this.archives.length} archive${this.archives.length === 1 ? '' : 's'}`;
-            this.renderArchiveTabsStrip();
             this.renderSearchArchiveScope();
             this.renderClipboardPill(status.clipboard);
             this.renderConsoleLogs(status.logs || []);
@@ -178,7 +165,10 @@ namespace MapleRepacker {
             if (this.selectedArchiveId) {
                 // Ensure root children of active archive are loaded
                 const rootKey = this.makeCacheKey(this.selectedArchiveId, '');
-                if (!this.treeState.childrenByParent.has(rootKey) || archiveChanged) {
+                if (!this.treeState.childrenByParent.has(rootKey)) {
+                    this.treeState.expandedKeys.add(rootKey);
+                    await this.fetchTreeChildren(this.selectedArchiveId, '');
+                } else if (archiveChanged) {
                     await this.fetchTreeChildren(this.selectedArchiveId, '');
                 }
                 this.renderTree();
@@ -217,50 +207,6 @@ namespace MapleRepacker {
             this.activeHexBytes = new Uint8Array(0);
             this.selectedHexOffset = 0;
             this.renderHexInspector();
-        }
-
-        private renderArchiveTabsStrip(): void {
-            const strip = document.getElementById('archiveTabsStrip')!;
-            strip.innerHTML = '';
-            for (const ar of this.archives) {
-                const btn = document.createElement('button');
-                btn.type = 'button';
-                btn.className = `archive-pill${ar.archiveId === this.selectedArchiveId ? ' active' : ''}`;
-                btn.title = `${ar.name} (v${ar.version}, ${ar.imageCount} images)${ar.filePath ? '\n' + ar.filePath : ''}`;
-
-                const label = document.createElement('span');
-                label.textContent = ar.name;
-                btn.appendChild(label);
-
-                if (ar.isModified) {
-                    const dot = document.createElement('span');
-                    dot.className = 'dirty-dot';
-                    dot.title = `${ar.modifiedImageCount} modified image(s)`;
-                    btn.appendChild(dot);
-                }
-
-                const closeSpan = document.createElement('span');
-                closeSpan.className = 'archive-pill-close';
-                closeSpan.title = `Close ${ar.name}`;
-                closeSpan.innerHTML = '&times;';
-                closeSpan.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
-                    this.closeContextMenu();
-                    void this.requestCloseArchive(ar.archiveId);
-                });
-                btn.appendChild(closeSpan);
-
-                btn.addEventListener('click', () => {
-                    this.closeContextMenu();
-                    void this.selectAndInspectNode(ar.archiveId, '', true);
-                });
-                btn.addEventListener('contextmenu', (ev) => {
-                    ev.preventDefault();
-                    ev.stopPropagation();
-                    this.openContextMenu(ev.clientX, ev.clientY, ar.archiveId, '');
-                });
-                strip.appendChild(btn);
-            }
         }
 
         private renderSearchArchiveScope(): void {
@@ -379,10 +325,7 @@ namespace MapleRepacker {
 
             for (const ar of this.archives) {
                 const rootKey = this.makeCacheKey(ar.archiveId, '');
-                const isRootExpanded = this.treeState.expandedKeys.has(rootKey) || ar.archiveId === this.selectedArchiveId;
-                if (isRootExpanded) {
-                    this.treeState.expandedKeys.add(rootKey);
-                }
+                const isRootExpanded = this.treeState.expandedKeys.has(rootKey);
 
                 // Render Archive Root Row
                 const rootRow = document.createElement('div');
@@ -392,17 +335,28 @@ namespace MapleRepacker {
                 rootRow.dataset.archiveId = ar.archiveId;
                 rootRow.dataset.path = '';
 
+                const rootStatusDot = ar.isAdded
+                    ? '<span class="tree-add-dot" title="Added"></span>'
+                    : ar.isModified
+                      ? '<span class="tree-mod-dot" title="Modified"></span>'
+                      : '';
+
                 rootRow.innerHTML = `
                     <span class="tree-twisty">${isRootExpanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="tree-badge badge-WZ">WZ</span>
                     <span class="tree-name">${this.escapeHtml(ar.name)}</span>
                     <span class="tree-val-preview">v${ar.version} &bull; ${ar.imageCount} img</span>
-                    ${ar.isModified ? '<span class="tree-mod-dot" title="Modified"></span>' : ''}
+                    ${rootStatusDot}
                 `;
 
-                rootRow.addEventListener('click', () => {
+                rootRow.addEventListener('click', (ev) => {
                     this.closeContextMenu();
-                    void this.toggleOrSelectTreeNode(ar.archiveId, '', true);
+                    const clickedTwisty = (ev.target as HTMLElement).classList.contains('tree-twisty');
+                    void this.toggleOrSelectTreeNode(ar.archiveId, '', true, clickedTwisty);
+                });
+                rootRow.addEventListener('dblclick', () => {
+                    this.closeContextMenu();
+                    void this.toggleNodeExpansionOnly(ar.archiveId, '');
                 });
                 rootRow.addEventListener('contextmenu', (ev) => {
                     ev.preventDefault();
@@ -451,13 +405,18 @@ namespace MapleRepacker {
 
                 const twistyChar = node.hasChildren ? (isExpanded ? '&#9662;' : '&#9656;') : '';
                 const valPreview = node.displayValue ? `<span class="tree-val-preview">${this.escapeHtml(node.displayValue)}</span>` : '';
+                const statusDot = node.isAdded
+                    ? '<span class="tree-add-dot" title="Added"></span>'
+                    : node.isModified
+                      ? '<span class="tree-mod-dot" title="Modified"></span>'
+                      : '';
 
                 row.innerHTML = `
                     <span class="tree-twisty">${twistyChar}</span>
                     <span class="tree-badge badge-${this.escapeHtml(node.typeBadge)}">${this.escapeHtml(node.typeBadge)}</span>
                     <span class="tree-name">${this.escapeHtml(node.name)}</span>
                     ${valPreview}
-                    ${node.isModified ? '<span class="tree-mod-dot" title="Modified"></span>' : ''}
+                    ${statusDot}
                 `;
 
                 row.addEventListener('click', (ev) => {
@@ -559,7 +518,6 @@ namespace MapleRepacker {
             } else {
                 this.renderTree();
             }
-            this.renderArchiveTabsStrip();
 
             const res = await rpcCall<NodeInspectionDto>('node.inspect', {
                 archiveId,
@@ -644,10 +602,15 @@ namespace MapleRepacker {
             });
 
             const metaBadges = document.getElementById('stageMetaBadges')!;
+            const changeChip = dto.isAdded
+                ? '<span class="meta-chip" style="color:var(--accent-green); border-color:var(--accent-green-border); background:var(--accent-green-bg)">ADDED</span>'
+                : dto.isModified
+                  ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>'
+                  : '';
             metaBadges.innerHTML = `
                 <span class="meta-chip">${this.escapeHtml(dto.typeBadge)}</span>
                 <span class="meta-chip">${formatByteSize(dto.sizeBytes)}</span>
-                ${dto.isModified ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>' : ''}
+                ${changeChip}
             `;
         }
 
@@ -1295,21 +1258,34 @@ namespace MapleRepacker {
             // Hidden browser file input handlers
             const wzInput = document.getElementById('hiddenWzFileInput') as HTMLInputElement;
             wzInput.addEventListener('change', async () => {
-                const file = wzInput.files?.[0];
+                const files = Array.from(wzInput.files || []);
                 wzInput.value = '';
-                if (!file) return;
-                const bytes = new Uint8Array(await file.arrayBuffer());
-                const res = await rpcCall<RpcOperationResponse>('workspace.openBytes', {
-                    fileName: file.name,
-                    data: bytes,
-                });
-                this.closeModal();
-                if (res.ok && res.data.archiveId) {
-                    this.showToast(`Loaded ${file.name}`, 'success');
-                    await this.fetchTreeChildren(res.data.archiveId, '');
-                    await this.selectAndInspectNode(res.data.archiveId, '', true);
-                } else {
-                    this.showToast(res.data?.error || 'Failed to open WZ file', 'error');
+                if (files.length === 0) return;
+                let lastArchiveId = '';
+                for (const file of files) {
+                    const existing = this.findExistingOpenArchive(file.name);
+                    if (existing) {
+                        const confirmed = await this.confirmReloadArchive(existing);
+                        if (!confirmed) {
+                            continue;
+                        }
+                    }
+                    const bytes = new Uint8Array(await file.arrayBuffer());
+                    const res = await rpcCall<RpcOperationResponse>('workspace.openBytes', {
+                        fileName: file.name,
+                        data: bytes,
+                    });
+                    if (res.ok && res.data.archiveId) {
+                        this.clearArchiveTreeCache(res.data.archiveId);
+                        lastArchiveId = res.data.archiveId;
+                        this.showToast(`Loaded ${file.name}`, 'success');
+                        await this.fetchTreeChildren(res.data.archiveId, '');
+                    } else {
+                        this.showToast(res.data?.error || `Failed to open ${file.name}`, 'error');
+                    }
+                }
+                if (lastArchiveId) {
+                    await this.selectAndInspectNode(lastArchiveId, '', true);
                 }
             });
 
@@ -1366,10 +1342,10 @@ namespace MapleRepacker {
         private dispatchMenuAction(action: string): void {
             switch (action) {
                 case 'openFileModal':
-                    this.openFileModal();
+                    this.triggerOpenWzFile();
                     break;
                 case 'openDirModal':
-                    this.openDirectoryModal();
+                    this.triggerOpenDirectory();
                     break;
                 case 'newArchiveModal':
                     this.openNewArchiveModal();
@@ -1461,9 +1437,6 @@ namespace MapleRepacker {
         private bindTreeEvents(): void {
             document.getElementById('btnCollapseAll')!.addEventListener('click', () => {
                 this.treeState.expandedKeys.clear();
-                if (this.selectedArchiveId) {
-                    this.treeState.expandedKeys.add(this.makeCacheKey(this.selectedArchiveId, ''));
-                }
                 this.renderTree();
             });
 
@@ -1944,7 +1917,7 @@ namespace MapleRepacker {
                 }
                 if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'o') {
                     ev.preventDefault();
-                    this.openFileModal();
+                    this.triggerOpenWzFile();
                     return;
                 }
                 if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === 's') {
@@ -2161,7 +2134,7 @@ namespace MapleRepacker {
             const ar = this.archives.find((a) => a.archiveId === archiveId);
             if (!ar) return;
 
-            if (!ar.isModified) {
+            if (!ar.isModified && !ar.isAdded) {
                 await this.performCloseArchive(ar.archiveId);
                 return;
             }
@@ -2236,6 +2209,7 @@ namespace MapleRepacker {
         // ---------------------------------------------------------------------
 
         private showModal(title: string, bodyHtml: string, footerHtml: string): void {
+            this.modalCancelCallback = null;
             document.getElementById('modalTitle')!.textContent = title;
             document.getElementById('modalBody')!.innerHTML = bodyHtml;
             document.getElementById('modalFooter')!.innerHTML = footerHtml;
@@ -2244,60 +2218,161 @@ namespace MapleRepacker {
 
         private closeModal(): void {
             document.getElementById('modalBackdrop')!.classList.add('hidden');
+            if (this.modalCancelCallback) {
+                const cb = this.modalCancelCallback;
+                this.modalCancelCallback = null;
+                cb();
+            }
         }
 
-        private openFileModal(): void {
-            const recentHtml =
-                this.recentPaths.length > 0
-                    ? `<div class="form-row"><label>Recent Paths</label><div class="recent-paths-list">${this.recentPaths
-                          .map((p) => `<button type="button" class="recent-path-btn" data-path="${this.escapeHtml(p)}">${this.escapeHtml(p)}</button>`)
-                          .join('')}</div></div>`
+        private findExistingOpenArchive(filePathOrName: string): ArchiveSummaryDto | undefined {
+            const rawTrimmed = filePathOrName.trim();
+            if (!rawTrimmed) return undefined;
+            const basePart = rawTrimmed.split(/[\\/]/).pop() || rawTrimmed;
+            const cleanName = basePart.toLowerCase().endsWith('.wz') ? basePart : `${basePart}.wz`;
+            const lowerCleanName = cleanName.toLowerCase();
+            const lowerFullPath = rawTrimmed.toLowerCase();
+
+            return this.archives.find(
+                (a) =>
+                    (a.filePath && a.filePath.toLowerCase() === lowerFullPath) ||
+                    a.name.toLowerCase() === lowerCleanName
+            );
+        }
+
+        private clearArchiveTreeCache(archiveId: string): void {
+            const prefix = `${archiveId}::`;
+            for (const key of Array.from(this.treeState.childrenByParent.keys())) {
+                if (key.startsWith(prefix)) {
+                    this.treeState.childrenByParent.delete(key);
+                }
+            }
+            for (const key of Array.from(this.treeState.expandedKeys.values())) {
+                if (key.startsWith(prefix)) {
+                    this.treeState.expandedKeys.delete(key);
+                }
+            }
+            this.treeState.expandedKeys.add(this.makeCacheKey(archiveId, ''));
+        }
+
+        private confirmReloadArchive(existing: ArchiveSummaryDto): Promise<boolean> {
+            return new Promise<boolean>((resolve) => {
+                let settled = false;
+                const finish = (confirmed: boolean) => {
+                    if (settled) return;
+                    settled = true;
+                    this.modalCancelCallback = null;
+                    this.closeModal();
+                    resolve(confirmed);
+                };
+
+                const hasUnsaved = Boolean(existing.isModified || existing.isAdded);
+                const unsavedNote = hasUnsaved
+                    ? `<p style="margin: 8px 0 0; color: var(--amber); font-size: 12px;">Warning: This archive has unsaved changes that will be discarded if you reload it.</p>`
                     : '';
 
-            this.showModal(
-                'Open WZ Archive (.wz)',
-                `
-                <div class="form-row">
-                    <label>Local Disk Path to .wz File</label>
-                    <input type="text" id="modalFilePathInput" class="input-full" placeholder="C:\\Nexon\\MapleStory\\Data\\Character\\Character_000.wz" />
-                </div>
-                <div class="form-row">
-                    <label>Or Upload .wz File from Browser</label>
-                    <button type="button" class="cmd-btn" id="btnModalBrowseUpload">Choose .wz File from Computer...</button>
-                </div>
-                ${recentHtml}
-                `,
-                `
-                <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
-                <button type="button" class="cmd-btn primary" id="btnModalConfirm">Open File</button>
-                `
-            );
+                this.showModal(
+                    `Archive Already Open`,
+                    `
+                    <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
+                        <strong>${this.escapeHtml(existing.name)}</strong> is already open in the workspace.
+                        Do you want to reload it and replace the currently open archive?
+                    </p>
+                    ${unsavedNote}
+                    `,
+                    `
+                    <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
+                    <button type="button" class="cmd-btn ${hasUnsaved ? 'danger' : 'primary'}" id="btnModalConfirmReload">Reload Archive</button>
+                    `
+                );
 
-            document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
-            document.getElementById('btnModalBrowseUpload')!.addEventListener('click', () => {
+                this.modalCancelCallback = () => finish(false);
+                document.getElementById('btnModalCancel')!.addEventListener('click', () => finish(false));
+                document.getElementById('btnModalConfirmReload')!.addEventListener('click', () => finish(true));
+            });
+        }
+
+        private triggerOpenWzFile(): void {
+            if (this.supportsNativeDialogs) {
+                void this.browseNativeWzFile();
+            } else {
                 (document.getElementById('hiddenWzFileInput') as HTMLInputElement).click();
-            });
+            }
+        }
 
-            document.querySelectorAll('.recent-path-btn').forEach((btn) => {
-                btn.addEventListener('click', () => {
-                    (document.getElementById('modalFilePathInput') as HTMLInputElement).value =
-                        (btn as HTMLElement).dataset.path || '';
-                });
-            });
+        private async browseNativeWzFile(): Promise<void> {
+            const res = await rpcCall<RpcOperationResponse>('workspace.browseFiles', {});
+            if (res.data?.cancelled) {
+                return;
+            }
+            if (!res.ok) {
+                this.showToast(res.data?.error || 'Could not browse files', 'error');
+                return;
+            }
 
-            document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
-                const filePath = (document.getElementById('modalFilePathInput') as HTMLInputElement).value.trim();
-                if (!filePath) return;
-                const res = await rpcCall<RpcOperationResponse>('workspace.openFile', { filePath });
-                if (res.ok && res.data.archiveId) {
-                    this.closeModal();
-                    this.showToast(`Opened ${filePath}`, 'success');
+            const filePaths = res.data.filePaths || [];
+            if (filePaths.length === 0) {
+                return;
+            }
+
+            const openedNames: string[] = [];
+            let lastArchiveId = '';
+
+            for (const filePath of filePaths) {
+                const existing = this.findExistingOpenArchive(filePath);
+                if (existing) {
+                    const confirmed = await this.confirmReloadArchive(existing);
+                    if (!confirmed) {
+                        continue;
+                    }
+                }
+
+                const openRes = await rpcCall<RpcOperationResponse>('workspace.openFile', { filePath });
+                if (openRes.ok && openRes.data.archiveId) {
+                    this.clearArchiveTreeCache(openRes.data.archiveId);
+                    lastArchiveId = openRes.data.archiveId;
+                    const name = openRes.data.archive?.name || filePath.split(/[\\/]/).pop() || filePath;
+                    openedNames.push(name);
+                    await this.fetchTreeChildren(openRes.data.archiveId, '');
+                } else {
+                    this.showToast(openRes.data?.error || `Could not open ${filePath}`, 'error');
+                }
+            }
+
+            if (lastArchiveId) {
+                const label =
+                    openedNames.length === 1
+                        ? openedNames[0]
+                        : `${openedNames.length} WZ archives`;
+                this.showToast(`Opened ${label}`, 'success');
+                await this.selectAndInspectNode(lastArchiveId, '', true);
+            }
+        }
+
+        private triggerOpenDirectory(): void {
+            if (this.supportsNativeDialogs) {
+                void this.browseNativeDirectory();
+            } else {
+                this.openDirectoryModal();
+            }
+        }
+
+        private async browseNativeDirectory(): Promise<void> {
+            const res = await rpcCall<RpcOperationResponse>('workspace.browseAndOpenDirectory', {});
+            if (res.data?.cancelled) {
+                return;
+            }
+            if (res.ok) {
+                this.treeState.childrenByParent.clear();
+                const count = res.data.archives?.length ?? 0;
+                this.showToast(`Loaded ${count} WZ archive${count === 1 ? '' : 's'}`, 'success');
+                if (res.data.archiveId) {
                     await this.fetchTreeChildren(res.data.archiveId, '');
                     await this.selectAndInspectNode(res.data.archiveId, '', true);
-                } else {
-                    this.showToast(res.data?.error || 'Could not open file', 'error');
                 }
-            });
+            } else {
+                this.showToast(res.data?.error || 'Failed to open directory', 'error');
+            }
         }
 
         private openDirectoryModal(): void {

@@ -249,6 +249,19 @@ public sealed class RepackerEngineTests {
         Assert.True(addOk, addErr);
         Assert.Equal("Coat/01040000.img/info/customTag", addedPath);
 
+        TreeNodeDto[] infoChildren = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
+        TreeNodeDto islotChild = Assert.Single(infoChildren, n => n.Name == "islot");
+        Assert.False(islotChild.IsModified);
+        Assert.False(islotChild.IsAdded);
+
+        TreeNodeDto reqLevelChild = Assert.Single(infoChildren, n => n.Name == "reqLevel");
+        Assert.True(reqLevelChild.IsModified);
+        Assert.False(reqLevelChild.IsAdded);
+
+        TreeNodeDto customTagChild = Assert.Single(infoChildren, n => n.Name == "customTag");
+        Assert.True(customTagChild.IsAdded);
+        Assert.False(customTagChild.IsModified);
+
         (bool renOk, string? renErr, string newPath) = workspace.RenameNode(
             charArchiveId,
             "Coat/01040000.img/info/customTag",

@@ -226,6 +226,11 @@ public class Program {
     }
 
     private static WorkspaceStatusPayloadDto BuildStatusPayload(RepackerWorkspace workspace, UserSettingsStore settingsStore) {
+#if WINDOWS
+        const bool supportsNativeDialogs = true;
+#else
+        const bool supportsNativeDialogs = false;
+#endif
         return new WorkspaceStatusPayloadDto(
             "status",
             workspace.StateVersion,
@@ -235,7 +240,8 @@ public class Program {
             workspace.GetClipboardState(),
             workspace.GetLogs().ToArray(),
             settingsStore.GetUiState(),
-            settingsStore.GetRecentPaths());
+            settingsStore.GetRecentPaths(),
+            supportsNativeDialogs);
     }
 
     private static (bool Ok, object? Data) ExecuteRpcMethod(
@@ -247,6 +253,44 @@ public class Program {
             switch (method) {
                 case "workspace.status":
                     return (true, BuildStatusPayload(workspace, settingsStore));
+
+                case "workspace.browseFiles": {
+#if WINDOWS
+                    string? initialDir = settingsStore.GetRecentPaths().FirstOrDefault();
+                    string[]? filePaths = WindowsDesktopShell.PickOpenWzFiles(initialDir);
+                    if (filePaths is not { Length: > 0 }) {
+                        return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
+                    }
+                    return (true, new RpcOperationResponse(
+                        Ok: true,
+                        FilePaths: filePaths));
+#else
+                    return (false, new RpcOperationResponse(false, "Native file dialog is not supported on this platform."));
+#endif
+                }
+
+                case "workspace.browseAndOpenDirectory": {
+#if WINDOWS
+                    string? initialDir = settingsStore.GetRecentPaths().FirstOrDefault();
+                    string? directoryPath = WindowsDesktopShell.PickOpenDirectory(initialDir);
+                    if (string.IsNullOrWhiteSpace(directoryPath)) {
+                        return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
+                    }
+                    ArchiveSummaryDto[] opened = workspace.OpenDataDirectory(directoryPath);
+                    if (opened.Length > 0) {
+                        settingsStore.RecordRecentPath(Path.GetFullPath(directoryPath));
+                    }
+                    return (opened.Length > 0, new RpcOperationResponse(
+                        Ok: opened.Length > 0,
+                        Error: opened.Length == 0 ? "No readable .wz files found in the selected directory." : null,
+                        ArchiveId: workspace.SelectedArchiveId,
+                        Path: workspace.SelectedNodePath,
+                        Archives: opened,
+                        Status: BuildStatusPayload(workspace, settingsStore)));
+#else
+                    return (false, new RpcOperationResponse(false, "Native folder dialog is not supported on this platform."));
+#endif
+                }
 
                 case "workspace.openFile": {
                     OpenArchiveFileRequest req = RpcSerializer.DecodeParams<OpenArchiveFileRequest>(rawParams);

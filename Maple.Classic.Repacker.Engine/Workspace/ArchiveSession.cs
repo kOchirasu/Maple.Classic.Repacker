@@ -10,6 +10,8 @@ public sealed class VirtualFsNode(string name, WzNodeKind kind, WzNode? backingN
     public List<VirtualFsNode> Children { get; } = [];
     public string? DiskDirectoryPath { get; set; }
     public bool IsDiskLinked { get; set; }
+    public bool IsUserAdded { get; set; }
+    public bool HasChildStructureChanges { get; set; }
 
     public bool IsDir => Kind == WzNodeKind.Directory;
     public bool IsImage => Kind == WzNodeKind.Image;
@@ -23,6 +25,7 @@ public sealed class ArchiveSession : IDisposable {
     private const int MaxUndoDepth = 32;
 
     private readonly Dictionary<string, WzValue> loadedImages = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, WzValue> baselineImages = new(StringComparer.Ordinal);
     private readonly HashSet<string> modifiedImages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Stack<byte[]>> undoStacks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Stack<byte[]>> redoStacks = new(StringComparer.Ordinal);
@@ -36,6 +39,7 @@ public sealed class ArchiveSession : IDisposable {
     public WzArchive Archive { get; private set; }
     public VirtualFsNode VirtualRoot { get; private set; }
     public bool HasStructureChanges { get; set; }
+    public bool IsUserCreatedArchive { get; set; }
 
     public bool IsModified => HasStructureChanges || modifiedImages.Count > 0;
     public int ModifiedImageCount => modifiedImages.Count;
@@ -372,7 +376,8 @@ public sealed class ArchiveSession : IDisposable {
             dirs,
             imgs,
             modifiedImages.Count,
-            IsModified);
+            !IsUserCreatedArchive && IsModified,
+            IsUserCreatedArchive);
     }
 
     public static (int Directories, int Images) CountVirtualRecursive(VirtualFsNode root) {
@@ -435,22 +440,63 @@ public sealed class ArchiveSession : IDisposable {
 
     public bool IsImageModified(string imagePath) => modifiedImages.Contains(NormalizePath(imagePath));
 
-    public bool IsPathModified(string path) {
-        string norm = NormalizePath(path);
-        if (string.IsNullOrEmpty(norm)) {
-            return IsModified;
+    public bool IsImageAdded(string imagePath) {
+        if (IsUserCreatedArchive) {
+            return true;
         }
-        (string? imgPath, _) = SplitImageAndSubPath(norm);
-        if (imgPath is not null) {
-            return modifiedImages.Contains(imgPath);
+        VirtualFsNode? vNode = ResolveVirtualNode(NormalizePath(imagePath));
+        return vNode?.IsUserAdded == true;
+    }
+
+    public bool TryGetBaselineImage(string imagePath, out WzValue? baseline) =>
+        baselineImages.TryGetValue(NormalizePath(imagePath), out baseline);
+
+    public (bool IsModified, bool IsAdded) GetDirectoryChangeState(string dirPath, VirtualFsNode dirNode) {
+        if (IsUserCreatedArchive || dirNode.IsUserAdded) {
+            return (false, true);
         }
-        string prefix = norm + "/";
+        bool modified = IsDirectorySubtreeDirty(NormalizePath(dirPath), dirNode);
+        return (modified, false);
+    }
+
+    private bool IsDirectorySubtreeDirty(string normDirPath, VirtualFsNode dirNode) {
+        if (dirNode.HasChildStructureChanges) {
+            return true;
+        }
+        string prefix = string.IsNullOrEmpty(normDirPath) ? string.Empty : normDirPath + "/";
         foreach (string modImg in modifiedImages) {
-            if (modImg.StartsWith(prefix, StringComparison.Ordinal)) {
+            if (string.IsNullOrEmpty(prefix) || modImg.StartsWith(prefix, StringComparison.Ordinal)) {
                 return true;
             }
         }
+        foreach (VirtualFsNode child in dirNode.Children) {
+            if (child.IsUserAdded) {
+                return true;
+            }
+            if (child.IsDir) {
+                string childPath = string.IsNullOrEmpty(normDirPath) ? child.Name : $"{normDirPath}/{child.Name}";
+                if (IsDirectorySubtreeDirty(childPath, child)) {
+                    return true;
+                }
+            }
+        }
         return false;
+    }
+
+    public bool IsPathModified(string path) {
+        string norm = NormalizePath(path);
+        if (string.IsNullOrEmpty(norm)) {
+            return !IsUserCreatedArchive && IsModified;
+        }
+        (string? imgPath, _) = SplitImageAndSubPath(norm);
+        if (imgPath is not null) {
+            return !IsImageAdded(imgPath) && modifiedImages.Contains(imgPath);
+        }
+        VirtualFsNode? dirNode = ResolveVirtualNode(norm);
+        if (dirNode is null) {
+            return false;
+        }
+        return GetDirectoryChangeState(norm, dirNode).IsModified;
     }
 
     public WzValue GetOrParseImage(string imagePath) {
@@ -498,8 +544,19 @@ public sealed class ArchiveSession : IDisposable {
         return vNode?.BackingNode?.Size ?? 0;
     }
 
+    private void EnsureBaselineRecorded(string normImagePath) {
+        if (baselineImages.ContainsKey(normImagePath)) {
+            return;
+        }
+        VirtualFsNode? vNode = ResolveVirtualNode(normImagePath);
+        if (vNode is { IsUserAdded: false, BackingNode: not null }) {
+            baselineImages[normImagePath] = vNode.BackingNode.ParseImage();
+        }
+    }
+
     public void RecordUndoSnapshot(string imagePath) {
         string norm = NormalizePath(imagePath);
+        EnsureBaselineRecorded(norm);
         WzValue current = GetOrParseImage(norm);
         byte[] snapshot = current.ToBytes();
 
@@ -523,10 +580,17 @@ public sealed class ArchiveSession : IDisposable {
 
     public void MarkImageModified(string imagePath, WzValue? newRoot = null) {
         string norm = NormalizePath(imagePath);
+        EnsureBaselineRecorded(norm);
         if (newRoot is not null) {
             loadedImages[norm] = newRoot;
         }
-        modifiedImages.Add(norm);
+        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) &&
+            loadedImages.TryGetValue(norm, out WzValue? curImg) &&
+            curImg.Equals(baseImg)) {
+            modifiedImages.Remove(norm);
+        } else {
+            modifiedImages.Add(norm);
+        }
     }
 
     public bool CanUndo(string? imagePath) {
@@ -555,8 +619,13 @@ public sealed class ArchiveSession : IDisposable {
         redo.Push(current.ToBytes());
 
         byte[] prevBytes = undo.Pop();
-        loadedImages[norm] = WzValue.Parse(prevBytes);
-        modifiedImages.Add(norm);
+        WzValue restored = WzValue.Parse(prevBytes);
+        loadedImages[norm] = restored;
+        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) && restored.Equals(baseImg)) {
+            modifiedImages.Remove(norm);
+        } else {
+            modifiedImages.Add(norm);
+        }
         return true;
     }
 
@@ -574,8 +643,13 @@ public sealed class ArchiveSession : IDisposable {
         undo.Push(current.ToBytes());
 
         byte[] nextBytes = redo.Pop();
-        loadedImages[norm] = WzValue.Parse(nextBytes);
-        modifiedImages.Add(norm);
+        WzValue restored = WzValue.Parse(nextBytes);
+        loadedImages[norm] = restored;
+        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) && restored.Equals(baseImg)) {
+            modifiedImages.Remove(norm);
+        } else {
+            modifiedImages.Add(norm);
+        }
         return true;
     }
 
@@ -590,7 +664,9 @@ public sealed class ArchiveSession : IDisposable {
             string dirName = parts[i];
             VirtualFsNode? next = cur.Children.Find(c => c.IsDir && c.Name == dirName);
             if (next is null) {
-                next = new VirtualFsNode(dirName, WzNodeKind.Directory);
+                next = new VirtualFsNode(dirName, WzNodeKind.Directory) {
+                    IsUserAdded = true,
+                };
                 cur.Children.Add(next);
             }
             cur = next;
@@ -599,7 +675,9 @@ public sealed class ArchiveSession : IDisposable {
         string leafName = parts[^1];
         VirtualFsNode? existing = cur.Children.Find(c => c.Name == leafName);
         if (existing is null) {
-            cur.Children.Add(new VirtualFsNode(leafName, WzNodeKind.Image));
+            cur.Children.Add(new VirtualFsNode(leafName, WzNodeKind.Image) {
+                IsUserAdded = true,
+            });
         }
         loadedImages[norm] = rootValue;
         modifiedImages.Add(norm);
@@ -616,8 +694,11 @@ public sealed class ArchiveSession : IDisposable {
         if (existing is not null) {
             return existing;
         }
-        var created = new VirtualFsNode(dirName, WzNodeKind.Directory);
+        var created = new VirtualFsNode(dirName, WzNodeKind.Directory) {
+            IsUserAdded = true,
+        };
         parent.Children.Add(created);
+        parent.HasChildStructureChanges = true;
         HasStructureChanges = true;
         return created;
     }
@@ -640,7 +721,9 @@ public sealed class ArchiveSession : IDisposable {
             return false;
         }
 
+        parent.HasChildStructureChanges = true;
         loadedImages.Remove(norm);
+        baselineImages.Remove(norm);
         modifiedImages.Remove(norm);
         undoStacks.Remove(norm);
         redoStacks.Remove(norm);
@@ -648,6 +731,7 @@ public sealed class ArchiveSession : IDisposable {
         string prefix = norm + "/";
         foreach (string key in loadedImages.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) {
             loadedImages.Remove(key);
+            baselineImages.Remove(key);
             modifiedImages.Remove(key);
             undoStacks.Remove(key);
             redoStacks.Remove(key);
@@ -671,11 +755,16 @@ public sealed class ArchiveSession : IDisposable {
             return false;
         }
 
+        parent.HasChildStructureChanges = true;
         string newFullPath = string.IsNullOrEmpty(parentPath) ? newLeafName : $"{parentPath}/{newLeafName}";
         if (target.IsImage) {
+            EnsureBaselineRecorded(norm);
             WzValue parsed = GetOrParseImage(norm);
             target.Name = newLeafName;
             loadedImages.Remove(norm);
+            if (baselineImages.Remove(norm, out WzValue? baseImg)) {
+                baselineImages[newFullPath] = baseImg;
+            }
             modifiedImages.Remove(norm);
             loadedImages[newFullPath] = parsed;
             modifiedImages.Add(newFullPath);
@@ -688,6 +777,9 @@ public sealed class ArchiveSession : IDisposable {
                 loadedImages.Remove(key);
                 string migrated = newPrefix + key[oldPrefix.Length..];
                 loadedImages[migrated] = val;
+                if (baselineImages.Remove(key, out WzValue? baseImg)) {
+                    baselineImages[migrated] = baseImg;
+                }
                 if (modifiedImages.Remove(key)) {
                     modifiedImages.Add(migrated);
                 }
@@ -746,8 +838,10 @@ public sealed class ArchiveSession : IDisposable {
                     AssignChildDiskDirectories(VirtualRoot, isRoot: true);
                 }
             }
+            baselineImages.Clear();
             modifiedImages.Clear();
             HasStructureChanges = false;
+            IsUserCreatedArchive = false;
         }
 
         return bytes;

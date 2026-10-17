@@ -50,7 +50,8 @@ public sealed record ArchiveSummaryDto(
     int DirectoryCount,
     int ImageCount,
     int ModifiedImageCount,
-    bool IsModified);
+    bool IsModified,
+    bool IsAdded = false);
 
 public sealed record TreeNodeDto(
     string ArchiveId,
@@ -63,7 +64,8 @@ public sealed record TreeNodeDto(
     bool HasChildren,
     int ChildCount,
     bool IsModified,
-    int SizeBytes = 0);
+    int SizeBytes = 0,
+    bool IsAdded = false);
 
 public sealed record SubPropertyRowDto(
     string Name,
@@ -150,7 +152,8 @@ public sealed record NodeInspectionDto(
     AnimationFrameDto[] AnimationFrames,
     SoundPreviewDto? Sound,
     string? ResolvedUolTargetPath,
-    byte[] RawBinarySlice);
+    byte[] RawBinarySlice,
+    bool IsAdded = false);
 
 public sealed record SearchQueryDto {
     public string? ArchiveId { get; init; }

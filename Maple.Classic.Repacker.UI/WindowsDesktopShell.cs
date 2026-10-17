@@ -10,6 +10,8 @@ using Microsoft.Web.WebView2.WinForms;
 namespace Maple.Classic.Repacker.UI;
 
 internal static class WindowsDesktopShell {
+    internal static RepackerDesktopForm? ActiveForm { get; private set; }
+
     public static void Run(
         WebApplication app,
         RepackerWorkspace workspace,
@@ -23,8 +25,10 @@ internal static class WindowsDesktopShell {
         app.StartAsync().GetAwaiter().GetResult();
         try {
             using var form = new RepackerDesktopForm(listenUrl, settingsStore);
+            ActiveForm = form;
             Application.Run(form);
         } finally {
+            ActiveForm = null;
             try {
                 broadcastCts.Cancel();
             } catch {
@@ -47,6 +51,82 @@ internal static class WindowsDesktopShell {
                 // Ignore host disposal errors
             }
         }
+    }
+
+    public static string[]? PickOpenWzFiles(string? initialDirectory = null) {
+        return RunOnStaThread<string[]?>(owner => {
+            using var dlg = new OpenFileDialog {
+                Title = "Open MapleStory WZ Archive",
+                Filter = "MapleStory WZ Archives (*.wz)|*.wz|All Files (*.*)|*.*",
+                Multiselect = true,
+                CheckFileExists = true,
+            };
+            string? validDir = ResolveValidDirectory(initialDirectory);
+            if (!string.IsNullOrEmpty(validDir)) {
+                dlg.InitialDirectory = validDir;
+            }
+            DialogResult result = owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
+            return result == DialogResult.OK && dlg.FileNames.Length > 0 ? dlg.FileNames : null;
+        });
+    }
+
+    public static string? PickOpenDirectory(string? initialDirectory = null) {
+        return RunOnStaThread<string?>(owner => {
+            using var dlg = new FolderBrowserDialog {
+                Description = "Select MapleStory Data Directory",
+                UseDescriptionForTitle = true,
+                ShowNewFolderButton = false,
+            };
+            string? validDir = ResolveValidDirectory(initialDirectory);
+            if (!string.IsNullOrEmpty(validDir)) {
+                dlg.InitialDirectory = validDir;
+            }
+            DialogResult result = owner is not null ? dlg.ShowDialog(owner) : dlg.ShowDialog();
+            return result == DialogResult.OK && !string.IsNullOrWhiteSpace(dlg.SelectedPath) ? dlg.SelectedPath : null;
+        });
+    }
+
+    private static string? ResolveValidDirectory(string? candidatePath) {
+        if (string.IsNullOrWhiteSpace(candidatePath)) {
+            return null;
+        }
+        try {
+            if (Directory.Exists(candidatePath)) {
+                return Path.GetFullPath(candidatePath);
+            }
+            string? parent = Path.GetDirectoryName(candidatePath);
+            if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent)) {
+                return Path.GetFullPath(parent);
+            }
+        } catch {
+            // Ignore invalid paths
+        }
+        return null;
+    }
+
+    private static T? RunOnStaThread<T>(Func<IWin32Window?, T?> dialogAction) {
+        RepackerDesktopForm? form = ActiveForm;
+        if (form is { IsDisposed: false, IsHandleCreated: true }) {
+            if (form.InvokeRequired) {
+                return form.Invoke(() => dialogAction(form));
+            }
+            return dialogAction(form);
+        }
+
+        T? result = default;
+        var thread = new Thread(() => {
+            try {
+                result = dialogAction(null);
+            } catch {
+                result = default;
+            }
+        }) {
+            IsBackground = true,
+        };
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        thread.Join();
+        return result;
     }
 }
 

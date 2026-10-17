@@ -416,39 +416,6 @@ body.resizing-row * {
     white-space: nowrap;
 }
 
-.conn-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    font-family: var(--font-mono);
-    background-color: var(--accent-green-bg);
-    border: 1px solid var(--accent-green-border);
-    color: var(--accent-green);
-}
-
-.conn-dot {
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background-color: var(--accent-green);
-    box-shadow: 0 0 6px var(--accent-green);
-}
-
-.conn-badge.disconnected {
-    background-color: var(--accent-danger-bg);
-    border-color: var(--accent-danger-border);
-    color: var(--accent-danger);
-}
-
-.conn-badge.disconnected .conn-dot {
-    background-color: var(--accent-danger);
-    box-shadow: none;
-}
-
 /* 3-Pane Workspace Body */
 .workspace-body {
     display: flex;
@@ -546,71 +513,7 @@ body.resizing-row * {
     background-color: var(--accent-primary);
 }
 
-/* Archive Tabs Strip & Tree Explorer */
-.archive-tabs-strip {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    padding: 5px 8px;
-    background-color: var(--bg-base);
-    border-bottom: 1px solid var(--border-subtle);
-    overflow-x: auto;
-    flex-shrink: 0;
-}
-
-.archive-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 3px 8px;
-    border-radius: 4px;
-    background-color: var(--bg-elevated);
-    border: 1px solid var(--border-subtle);
-    color: var(--text-secondary);
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background-color 0.12s ease, color 0.12s ease, border-color 0.12s ease;
-}
-
-.archive-pill:hover {
-    background-color: var(--bg-hover);
-    color: var(--text-primary);
-}
-
-.archive-pill.active {
-    background-color: var(--bg-selected);
-    border-color: var(--border-focus);
-    color: var(--text-bright);
-    font-weight: 600;
-}
-
-.archive-pill .dirty-dot {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background-color: var(--accent-warning);
-}
-
-.archive-pill-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 15px;
-    height: 15px;
-    margin-left: 2px;
-    border-radius: 3px;
-    color: var(--text-muted);
-    font-size: 12px;
-    line-height: 1;
-    transition: background-color 0.12s ease, color 0.12s ease;
-}
-
-.archive-pill-close:hover {
-    background-color: var(--accent-danger-bg);
-    color: var(--accent-danger);
-}
+/* Tree Explorer */
 
 .tree-filter-bar {
     display: flex;
@@ -786,6 +689,15 @@ body.resizing-row * {
     height: 6px;
     border-radius: 50%;
     background-color: var(--accent-warning);
+    flex-shrink: 0;
+}
+
+.tree-add-dot {
+    margin-left: auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--accent-green);
     flex-shrink: 0;
 }
 
