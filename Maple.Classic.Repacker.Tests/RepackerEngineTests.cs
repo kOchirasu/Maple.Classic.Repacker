@@ -308,7 +308,13 @@ public sealed class RepackerEngineTests {
         Assert.Equal(RepackerChangeState.Deleted, deletedImgInspect.ChangeState);
         Assert.True(deletedImgInspect.CanUndo);
 
-        (bool undoImgOk, string? undoImgErr) = workspace.Undo(charArchiveId, "Coat/01040000.img");
+        // Switching to another node or archive root keeps Undo available in the archive undo queue
+        NodeInspectionDto otherNodeInspect = workspace.InspectNode(charArchiveId, "PetEquip/01802653.img");
+        Assert.True(otherNodeInspect.CanUndo);
+        NodeInspectionDto rootInspect = workspace.InspectNode(charArchiveId, "");
+        Assert.True(rootInspect.CanUndo);
+
+        (bool undoImgOk, string? undoImgErr) = workspace.Undo(charArchiveId, "");
         Assert.True(undoImgOk, undoImgErr);
 
         NodeInspectionDto restoredImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
@@ -316,11 +322,11 @@ public sealed class RepackerEngineTests {
         Assert.NotEqual(RepackerChangeState.Deleted, restoredImgInspect.ChangeState);
         Assert.True(restoredImgInspect.CanRedo);
 
-        (bool redoImgOk, string? redoImgErr) = workspace.Redo(charArchiveId, "Coat/01040000.img");
+        (bool redoImgOk, string? redoImgErr) = workspace.Redo(charArchiveId, "");
         Assert.True(redoImgOk, redoImgErr);
         Assert.Equal(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
 
-        (bool undoImgAgainOk, string? undoImgAgainErr) = workspace.Undo(charArchiveId, "Coat/01040000.img");
+        (bool undoImgAgainOk, string? undoImgAgainErr) = workspace.Undo(charArchiveId, "");
         Assert.True(undoImgAgainOk, undoImgAgainErr);
         Assert.NotEqual(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
 
@@ -418,9 +424,15 @@ public sealed class RepackerEngineTests {
             string charWzPath = Path.Combine(charDir, "Character.wz");
             System.IO.File.WriteAllBytes(charWzPath, BuildDirectoryOnlyWzArchive(["Coat", "Weapon"]));
 
-            // 6. Write Data/Base/Base.wz with empty DIR nodes "Character" and "String"
+            // 6. Write Data/Base/Base.wz with empty DIR nodes "Character" and "String" + Data/Base/Base_000.wz
             string baseWzPath = Path.Combine(baseDir, "Base.wz");
             System.IO.File.WriteAllBytes(baseWzPath, BuildDirectoryOnlyWzArchive(["Character", "String"]));
+            using (var baseShard = new WzArchive()) {
+                var pddImg = new WzValue.Object();
+                pddImg["info/version"] = 1;
+                baseShard.SetImage("StandardPDD.img", pddImg);
+                baseShard.Save(Path.Combine(baseDir, "Base_000.wz"));
+            }
 
             // Test A: Opening Character.wz directly auto-links Coat, Coat/_Canvas, and Weapon
             using (var ws = new RepackerWorkspace()) {
@@ -482,6 +494,19 @@ public sealed class RepackerEngineTests {
                 Assert.Equal("Character.wz", single.Name);
                 TreeNodeDto[] coatKids = ws.GetTreeChildren(single.ArchiveId, "Coat");
                 Assert.Contains(coatKids, n => n.Name == "01040000.img");
+            }
+
+            // Test D2: OpenDataDirectory on root Data/ merges everything under Base.wz (not Base_000.wz)
+            using (var ws = new RepackerWorkspace()) {
+                ArchiveSummaryDto[] opened = ws.OpenDataDirectory(tempRoot);
+                ArchiveSummaryDto single = Assert.Single(opened);
+                Assert.Equal("Base.wz", single.Name);
+                Assert.Single(ws.GetArchiveSummaries());
+
+                TreeNodeDto[] baseRoot = ws.GetTreeChildren(single.ArchiveId, "");
+                Assert.Contains(baseRoot, n => n.Name == "StandardPDD.img" && n.NodeKind == RepackerNodeKind.Image);
+                Assert.Contains(baseRoot, n => n.Name == "Character" && n.NodeKind == RepackerNodeKind.Directory);
+                Assert.Contains(baseRoot, n => n.Name == "String" && n.NodeKind == RepackerNodeKind.Directory);
             }
 
             // Test E: OpenArchiveFromBytes resolves disk path via hintPaths and links String_000.wz and Character subdirs

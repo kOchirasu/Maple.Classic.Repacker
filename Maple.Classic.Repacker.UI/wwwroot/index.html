@@ -31,16 +31,14 @@
                         <div class="menu-sep"></div>
                         <button type="button" data-action="openBulkExportModal">Bulk Asset Export to Directory...</button>
                         <button type="button" data-action="openInlineOutlinksModal">Export / Inline _outlink Sprites...</button>
-                        <div class="menu-sep"></div>
-                        <button type="button" data-action="closeActiveArchive">Close Active Archive</button>
                     </div>
                 </div>
 
                 <div class="menu-item" data-menu="edit">
                     <button type="button" class="menu-trigger">Edit</button>
                     <div class="menu-dropdown">
-                        <button type="button" data-action="undoNode">Undo Image Edit <kbd>Ctrl+Z</kbd></button>
-                        <button type="button" data-action="redoNode">Redo Image Edit <kbd>Ctrl+Y</kbd></button>
+                        <button type="button" data-action="undoNode">Undo <kbd>Ctrl+Z</kbd></button>
+                        <button type="button" data-action="redoNode">Redo <kbd>Ctrl+Y</kbd></button>
                         <div class="menu-sep"></div>
                         <button type="button" data-action="addPropertyModal">Add Property... <kbd>Ins</kbd></button>
                         <button type="button" data-action="addImageModal">Add .img Image...</button>
@@ -80,10 +78,10 @@
 
             <!-- Quick Command Toolbar -->
             <div class="command-toolbar">
-                <button type="button" class="cmd-btn" id="btnUndo" title="Undo last edit in current .img (Ctrl+Z)" disabled>
+                <button type="button" class="cmd-btn" id="btnUndo" title="Undo last edit (Ctrl+Z)" disabled>
                     <span>Undo</span>
                 </button>
-                <button type="button" class="cmd-btn" id="btnRedo" title="Redo edit in current .img (Ctrl+Y)" disabled>
+                <button type="button" class="cmd-btn" id="btnRedo" title="Redo edit (Ctrl+Y)" disabled>
                     <span>Redo</span>
                 </button>
             </div>

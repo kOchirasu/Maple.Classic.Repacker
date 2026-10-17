@@ -691,12 +691,12 @@ public class Program {
                     NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
                     string archiveId = req.ArchiveId ?? workspace.SelectedArchiveId ?? string.Empty;
                     string path = req.Path ?? workspace.SelectedNodePath;
-                    (bool ok, string? err) = workspace.Undo(archiveId, path);
+                    (bool ok, string? err) = workspace.Undo(archiveId, path, out string affectedPath);
                     return (ok, new RpcOperationResponse(
                         Ok: ok,
                         Error: err,
                         ArchiveId: archiveId,
-                        Path: path,
+                        Path: !string.IsNullOrEmpty(affectedPath) ? affectedPath : path,
                         Status: BuildStatusPayload(workspace, settingsStore)));
                 }
 
@@ -704,12 +704,12 @@ public class Program {
                     NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
                     string archiveId = req.ArchiveId ?? workspace.SelectedArchiveId ?? string.Empty;
                     string path = req.Path ?? workspace.SelectedNodePath;
-                    (bool ok, string? err) = workspace.Redo(archiveId, path);
+                    (bool ok, string? err) = workspace.Redo(archiveId, path, out string affectedPath);
                     return (ok, new RpcOperationResponse(
                         Ok: ok,
                         Error: err,
                         ArchiveId: archiveId,
-                        Path: path,
+                        Path: !string.IsNullOrEmpty(affectedPath) ? affectedPath : path,
                         Status: BuildStatusPayload(workspace, settingsStore)));
                 }
 

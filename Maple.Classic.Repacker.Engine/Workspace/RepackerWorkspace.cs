@@ -110,7 +110,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
     public ArchiveSummaryDto OpenArchiveFromFile(string filePath, ushort? version = null) {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        string fullPath = Path.GetFullPath(filePath);
+        string fullPath = ResolvePreferredRootArchivePathOnDisk(Path.GetFullPath(filePath));
         var wz = new WzArchive(fullPath, version);
         string fileName = Path.GetFileName(fullPath);
 
@@ -189,6 +189,17 @@ public sealed class RepackerWorkspace : IDisposable {
             string resolvedPath = !string.IsNullOrWhiteSpace(filePath)
                 ? filePath.Trim()
                 : TryResolveDiskPathUnsafe(cleanName, data.Length, hintPaths) ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(resolvedPath)) {
+                string preferredPath = ResolvePreferredRootArchivePathOnDisk(resolvedPath);
+                if (!string.Equals(preferredPath, resolvedPath, StringComparison.OrdinalIgnoreCase) &&
+                    System.IO.File.Exists(preferredPath)) {
+                    wz.Dispose();
+                    resolvedPath = preferredPath;
+                    cleanName = Path.GetFileName(preferredPath);
+                    stem = Path.GetFileNameWithoutExtension(cleanName);
+                    wz = new WzArchive(preferredPath, version);
+                }
+            }
 
             ArchiveSession? existing = !string.IsNullOrWhiteSpace(resolvedPath)
                 ? FindExistingOrLinkedSessionByPathUnsafe(resolvedPath)
@@ -258,6 +269,25 @@ public sealed class RepackerWorkspace : IDisposable {
                 archives.RemoveAt(i);
             }
         }
+    }
+
+    private static string ResolvePreferredRootArchivePathOnDisk(string fullPath) {
+        try {
+            string? dir = Path.GetDirectoryName(fullPath);
+            string stem = Path.GetFileNameWithoutExtension(fullPath);
+            string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
+            if (!string.IsNullOrEmpty(dir) &&
+                !string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) &&
+                !baseStem.EndsWith("_Canvas", StringComparison.OrdinalIgnoreCase)) {
+                string rootCandidate = Path.Combine(dir, $"{baseStem}.wz");
+                if (System.IO.File.Exists(rootCandidate)) {
+                    return Path.GetFullPath(rootCandidate);
+                }
+            }
+        } catch {
+            // Fall back to original path
+        }
+        return fullPath;
     }
 
     private static string ChoosePreferredRootArchivePath(string existingPath, string requestedPath) {
@@ -369,17 +399,18 @@ public sealed class RepackerWorkspace : IDisposable {
             .OrderBy(static p => p.Count(static c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar))
             .ThenBy(static p => {
                 string stem = Path.GetFileNameWithoutExtension(p);
-                return string.Equals(stem, "Base", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+                string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
+                return string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
             })
             .ThenBy(static p => {
                 string stem = Path.GetFileNameWithoutExtension(p);
                 string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
-                return string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+                return string.Equals(baseStem, "Base", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
             })
             .ThenBy(static p => p, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
-        var opened = new List<ArchiveSummaryDto>();
+        var openedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (string wzPath in wzFiles) {
             try {
                 bool alreadyLinked;
@@ -389,14 +420,23 @@ public sealed class RepackerWorkspace : IDisposable {
                 if (alreadyLinked) {
                     continue;
                 }
-                opened.Add(OpenArchiveFromFile(wzPath, version));
+                ArchiveSummaryDto summary = OpenArchiveFromFile(wzPath, version);
+                openedIds.Add(summary.ArchiveId);
             } catch (Exception ex) {
                 AppendLog($"Skipped \"{Path.GetFileName(wzPath)}\": {ex.Message}", RepackerLogLevel.Warning);
             }
         }
 
-        AppendLog($"Opened {opened.Count} WZ archive(s) from \"{fullDir}\".", RepackerLogLevel.Success);
-        return [.. opened];
+        ArchiveSummaryDto[] opened;
+        lock (syncLock) {
+            opened = archives
+                .Where(a => openedIds.Contains(a.ArchiveId))
+                .Select(static a => a.ToSummaryDto())
+                .ToArray();
+        }
+
+        AppendLog($"Opened {opened.Length} WZ archive(s) from \"{fullDir}\".", RepackerLogLevel.Success);
+        return opened;
     }
 
     public ArchiveSummaryDto CreateNewArchive(string name, ushort version = WzArchive.DefaultVersion) {
@@ -1821,41 +1861,39 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
-    public (bool Ok, string? Error) Undo(string archiveId, string path) {
+    public (bool Ok, string? Error) Undo(string archiveId, string? path = null) =>
+        Undo(archiveId, path, out _);
+
+    public (bool Ok, string? Error) Undo(string archiveId, string? path, out string affectedPath) {
         lock (syncLock) {
+            affectedPath = string.Empty;
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
                 return (false, $"Archive \"{archiveId}\" not found.");
             }
-            string norm = ArchiveSession.NormalizePath(path);
-            if (string.IsNullOrEmpty(norm)) {
-                return (false, "Select a node to undo.");
+            if (!session.Undo(out affectedPath)) {
+                return (false, "Nothing to undo.");
             }
-            if (!session.Undo(norm)) {
-                return (false, "Nothing to undo for this node.");
-            }
-            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(norm);
-            AppendLogUnsafe($"Undid last change in \"{imgPath ?? norm}\".", RepackerLogLevel.Info);
+            AppendLogUnsafe($"Undid last change in \"{affectedPath}\".", RepackerLogLevel.Info);
             NotifyStateChanged();
             return (true, null);
         }
     }
 
-    public (bool Ok, string? Error) Redo(string archiveId, string path) {
+    public (bool Ok, string? Error) Redo(string archiveId, string? path = null) =>
+        Redo(archiveId, path, out _);
+
+    public (bool Ok, string? Error) Redo(string archiveId, string? path, out string affectedPath) {
         lock (syncLock) {
+            affectedPath = string.Empty;
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
                 return (false, $"Archive \"{archiveId}\" not found.");
             }
-            string norm = ArchiveSession.NormalizePath(path);
-            if (string.IsNullOrEmpty(norm)) {
-                return (false, "Select a node to redo.");
+            if (!session.Redo(out affectedPath)) {
+                return (false, "Nothing to redo.");
             }
-            if (!session.Redo(norm)) {
-                return (false, "Nothing to redo for this node.");
-            }
-            (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(norm);
-            AppendLogUnsafe($"Redid change in \"{imgPath ?? norm}\".", RepackerLogLevel.Info);
+            AppendLogUnsafe($"Redid change in \"{affectedPath}\".", RepackerLogLevel.Info);
             NotifyStateChanged();
             return (true, null);
         }

@@ -113,7 +113,6 @@ namespace MapleRepacker {
         DownloadArchive = 'downloadArchive',
         OpenBulkExportModal = 'openBulkExportModal',
         OpenInlineOutlinksModal = 'openInlineOutlinksModal',
-        CloseActiveArchive = 'closeActiveArchive',
         UndoNode = 'undoNode',
         RedoNode = 'redoNode',
         AddPropertyModal = 'addPropertyModal',

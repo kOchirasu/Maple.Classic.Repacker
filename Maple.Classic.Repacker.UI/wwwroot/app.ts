@@ -1716,9 +1716,6 @@ namespace MapleRepacker {
                 case MenuBarAction.OpenInlineOutlinksModal:
                     this.openInlineOutlinksModal();
                     break;
-                case MenuBarAction.CloseActiveArchive:
-                    void this.closeActiveArchive();
-                    break;
                 case MenuBarAction.UndoNode:
                     void this.undoSelectedImage();
                     break;
@@ -2469,13 +2466,17 @@ namespace MapleRepacker {
         }
 
         private async undoSelectedImage(): Promise<void> {
-            if (!this.selectedArchiveId || !this.selectedPath) return;
+            if (!this.selectedArchiveId) return;
             const res = await rpcCall<RpcOperationResponse>('node.undo', {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast('Undid last change in image', ToastKind.Info);
+                const affectedPath = res.data.path || this.selectedPath;
+                this.showToast(affectedPath ? `Undid last change in ${affectedPath}` : 'Undid last change', ToastKind.Info);
+                if (affectedPath && affectedPath !== this.selectedPath) {
+                    await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, affectedPath);
+                }
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
@@ -2484,13 +2485,17 @@ namespace MapleRepacker {
         }
 
         private async redoSelectedImage(): Promise<void> {
-            if (!this.selectedArchiveId || !this.selectedPath) return;
+            if (!this.selectedArchiveId) return;
             const res = await rpcCall<RpcOperationResponse>('node.redo', {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast('Redid change in image', ToastKind.Info);
+                const affectedPath = res.data.path || this.selectedPath;
+                this.showToast(affectedPath ? `Redid change in ${affectedPath}` : 'Redid change', ToastKind.Info);
+                if (affectedPath && affectedPath !== this.selectedPath) {
+                    await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, affectedPath);
+                }
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
@@ -2635,11 +2640,6 @@ namespace MapleRepacker {
             a.remove();
             setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
             return true;
-        }
-
-        private async closeActiveArchive(): Promise<void> {
-            if (!this.selectedArchiveId) return;
-            await this.requestCloseArchive(this.selectedArchiveId);
         }
 
         private async requestCloseArchive(archiveId: string): Promise<void> {

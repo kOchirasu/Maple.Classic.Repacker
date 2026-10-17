@@ -30,21 +30,24 @@ public sealed record DeletedPropertyEntry(
 /// virtual directory/image tracking, automatic split/directory <c>.wz</c> linking, and per-image undo/redo history.
 /// </summary>
 public sealed class ArchiveSession : IDisposable {
-    private const int MaxUndoDepth = 32;
+    private const int MaxUndoDepth = 50;
 
     private sealed record ImageUndoSnapshot(
         byte[] ImageBytes,
         Dictionary<string, DeletedPropertyEntry> DeletedProperties,
         bool IsImageDeleted);
 
+    private sealed record UndoHistoryEntry(
+        string TargetPath,
+        ImageUndoSnapshot? ImageSnapshot,
+        bool WasDeleted);
+
     private readonly Dictionary<string, WzValue> loadedImages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WzValue> baselineImages = new(StringComparer.Ordinal);
     private readonly HashSet<string> modifiedImages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, DeletedPropertyEntry>> deletedPropertiesByImage = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<ImageUndoSnapshot>> undoStacks = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<ImageUndoSnapshot>> redoStacks = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<bool>> dirUndoStacks = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<bool>> dirRedoStacks = new(StringComparer.Ordinal);
+    private readonly Stack<UndoHistoryEntry> undoHistory = new();
+    private readonly Stack<UndoHistoryEntry> redoHistory = new();
     private readonly List<WzArchive> linkedArchives = [];
     private readonly HashSet<string> openedArchivePaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly ushort? explicitVersion;
@@ -703,29 +706,25 @@ public sealed class ArchiveSession : IDisposable {
         return new Dictionary<string, DeletedPropertyEntry>(map, StringComparer.Ordinal);
     }
 
+    private static void PushBounded(Stack<UndoHistoryEntry> stack, UndoHistoryEntry entry) {
+        if (stack.Count >= MaxUndoDepth) {
+            UndoHistoryEntry[] items = stack.ToArray();
+            stack.Clear();
+            for (int i = Math.Min(items.Length - 1, MaxUndoDepth - 2); i >= 0; i--) {
+                stack.Push(items[i]);
+            }
+        }
+        stack.Push(entry);
+    }
+
     public void RecordUndoSnapshot(string imagePath) {
         string norm = NormalizePath(imagePath);
         EnsureBaselineRecorded(norm);
         WzValue current = GetOrParseImage(norm);
         bool isDeleted = IsVirtualPathDeleted(norm);
         var snapshot = new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm), isDeleted);
-
-        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? stack)) {
-            stack = new Stack<ImageUndoSnapshot>();
-            undoStacks[norm] = stack;
-        }
-        if (stack.Count >= MaxUndoDepth) {
-            ImageUndoSnapshot[] items = stack.ToArray();
-            stack.Clear();
-            for (int i = Math.Min(items.Length - 1, MaxUndoDepth - 2); i >= 0; i--) {
-                stack.Push(items[i]);
-            }
-        }
-        stack.Push(snapshot);
-
-        if (redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo)) {
-            redo.Clear();
-        }
+        PushBounded(undoHistory, new UndoHistoryEntry(norm, snapshot, isDeleted));
+        redoHistory.Clear();
     }
 
     public void RecordDirectoryUndoSnapshot(string dirPath) {
@@ -734,22 +733,8 @@ public sealed class ArchiveSession : IDisposable {
             return;
         }
         bool isDeleted = IsVirtualPathDeleted(norm);
-        if (!dirUndoStacks.TryGetValue(norm, out Stack<bool>? stack)) {
-            stack = new Stack<bool>();
-            dirUndoStacks[norm] = stack;
-        }
-        if (stack.Count >= MaxUndoDepth) {
-            bool[] items = stack.ToArray();
-            stack.Clear();
-            for (int i = Math.Min(items.Length - 1, MaxUndoDepth - 2); i >= 0; i--) {
-                stack.Push(items[i]);
-            }
-        }
-        stack.Push(isDeleted);
-
-        if (dirRedoStacks.TryGetValue(norm, out Stack<bool>? redo)) {
-            redo.Clear();
-        }
+        PushBounded(undoHistory, new UndoHistoryEntry(norm, null, isDeleted));
+        redoHistory.Clear();
     }
 
     public void MarkImageModified(string imagePath, WzValue? newRoot = null) {
@@ -926,132 +911,88 @@ public sealed class ArchiveSession : IDisposable {
         }
     }
 
-    public bool CanUndo(string? path) {
-        if (string.IsNullOrEmpty(path)) return false;
-        string norm = NormalizePath(path);
-        (string? imgPath, _) = SplitImageAndSubPath(norm);
-        if (imgPath is not null) {
-            return undoStacks.TryGetValue(NormalizePath(imgPath), out Stack<ImageUndoSnapshot>? s) && s.Count > 0;
-        }
-        return dirUndoStacks.TryGetValue(norm, out Stack<bool>? d) && d.Count > 0;
-    }
+    public bool CanUndo(string? _ = null) => undoHistory.Count > 0;
 
-    public bool CanRedo(string? path) {
-        if (string.IsNullOrEmpty(path)) return false;
-        string norm = NormalizePath(path);
-        (string? imgPath, _) = SplitImageAndSubPath(norm);
-        if (imgPath is not null) {
-            return redoStacks.TryGetValue(NormalizePath(imgPath), out Stack<ImageUndoSnapshot>? s) && s.Count > 0;
-        }
-        return dirRedoStacks.TryGetValue(norm, out Stack<bool>? d) && d.Count > 0;
-    }
+    public bool CanRedo(string? _ = null) => redoHistory.Count > 0;
 
-    public bool Undo(string path) {
-        string normPath = NormalizePath(path);
-        (string? imgPath, _) = SplitImageAndSubPath(normPath);
-        if (imgPath is null) {
-            return UndoDirectory(normPath);
-        }
+    public bool Undo(string? _ = null) => Undo(out string _);
 
-        string norm = NormalizePath(imgPath);
-        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? undo) || undo.Count == 0) {
+    public bool Undo(out string affectedPath) {
+        if (undoHistory.Count == 0) {
+            affectedPath = string.Empty;
             return false;
         }
 
-        WzValue current = GetOrParseImage(norm);
-        bool curDeleted = IsVirtualPathDeleted(norm);
-        if (!redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo)) {
-            redo = new Stack<ImageUndoSnapshot>();
-            redoStacks[norm] = redo;
-        }
-        redo.Push(new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm), curDeleted));
+        UndoHistoryEntry prev = undoHistory.Pop();
+        string norm = prev.TargetPath;
+        affectedPath = norm;
 
-        ImageUndoSnapshot prev = undo.Pop();
-        WzValue restored = WzValue.Parse(prev.ImageBytes);
-        loadedImages[norm] = restored;
-        deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(prev.DeletedProperties, StringComparer.Ordinal);
-        if (prev.IsImageDeleted) {
+        if (prev.ImageSnapshot is not null) {
+            WzValue current = GetOrParseImage(norm);
+            bool curDeleted = IsVirtualPathDeleted(norm);
+            var curSnapshot = new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm), curDeleted);
+            PushBounded(redoHistory, new UndoHistoryEntry(norm, curSnapshot, curDeleted));
+
+            WzValue restored = WzValue.Parse(prev.ImageSnapshot.ImageBytes);
+            loadedImages[norm] = restored;
+            deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(prev.ImageSnapshot.DeletedProperties, StringComparer.Ordinal);
+            if (prev.ImageSnapshot.IsImageDeleted) {
+                RemoveVirtualNode(norm);
+            } else if (IsVirtualPathDeleted(norm)) {
+                RestoreVirtualNode(norm);
+            }
+            SyncDeletedProperties(norm);
+            UpdateImageModifiedFlag(norm);
+            return true;
+        }
+
+        bool curDirDeleted = IsVirtualPathDeleted(norm);
+        PushBounded(redoHistory, new UndoHistoryEntry(norm, null, curDirDeleted));
+        if (prev.WasDeleted) {
             RemoveVirtualNode(norm);
         } else if (IsVirtualPathDeleted(norm)) {
             RestoreVirtualNode(norm);
         }
-        SyncDeletedProperties(norm);
-        UpdateImageModifiedFlag(norm);
         return true;
     }
 
-    public bool Redo(string path) {
-        string normPath = NormalizePath(path);
-        (string? imgPath, _) = SplitImageAndSubPath(normPath);
-        if (imgPath is null) {
-            return RedoDirectory(normPath);
-        }
+    public bool Redo(string? _ = null) => Redo(out string _);
 
-        string norm = NormalizePath(imgPath);
-        if (!redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo) || redo.Count == 0) {
+    public bool Redo(out string affectedPath) {
+        if (redoHistory.Count == 0) {
+            affectedPath = string.Empty;
             return false;
         }
 
-        WzValue current = GetOrParseImage(norm);
-        bool curDeleted = IsVirtualPathDeleted(norm);
-        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? undo)) {
-            undo = new Stack<ImageUndoSnapshot>();
-            undoStacks[norm] = undo;
-        }
-        undo.Push(new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm), curDeleted));
+        UndoHistoryEntry next = redoHistory.Pop();
+        string norm = next.TargetPath;
+        affectedPath = norm;
 
-        ImageUndoSnapshot next = redo.Pop();
-        WzValue restored = WzValue.Parse(next.ImageBytes);
-        loadedImages[norm] = restored;
-        deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(next.DeletedProperties, StringComparer.Ordinal);
-        if (next.IsImageDeleted) {
+        if (next.ImageSnapshot is not null) {
+            WzValue current = GetOrParseImage(norm);
+            bool curDeleted = IsVirtualPathDeleted(norm);
+            var curSnapshot = new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm), curDeleted);
+            PushBounded(undoHistory, new UndoHistoryEntry(norm, curSnapshot, curDeleted));
+
+            WzValue restored = WzValue.Parse(next.ImageSnapshot.ImageBytes);
+            loadedImages[norm] = restored;
+            deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(next.ImageSnapshot.DeletedProperties, StringComparer.Ordinal);
+            if (next.ImageSnapshot.IsImageDeleted) {
+                RemoveVirtualNode(norm);
+            } else if (IsVirtualPathDeleted(norm)) {
+                RestoreVirtualNode(norm);
+            }
+            SyncDeletedProperties(norm);
+            UpdateImageModifiedFlag(norm);
+            return true;
+        }
+
+        bool curDirDeleted = IsVirtualPathDeleted(norm);
+        PushBounded(undoHistory, new UndoHistoryEntry(norm, null, curDirDeleted));
+        if (next.WasDeleted) {
             RemoveVirtualNode(norm);
         } else if (IsVirtualPathDeleted(norm)) {
             RestoreVirtualNode(norm);
-        }
-        SyncDeletedProperties(norm);
-        UpdateImageModifiedFlag(norm);
-        return true;
-    }
-
-    private bool UndoDirectory(string normDirPath) {
-        if (string.IsNullOrEmpty(normDirPath) || !dirUndoStacks.TryGetValue(normDirPath, out Stack<bool>? undo) || undo.Count == 0) {
-            return false;
-        }
-
-        bool curDeleted = IsVirtualPathDeleted(normDirPath);
-        if (!dirRedoStacks.TryGetValue(normDirPath, out Stack<bool>? redo)) {
-            redo = new Stack<bool>();
-            dirRedoStacks[normDirPath] = redo;
-        }
-        redo.Push(curDeleted);
-
-        bool prevDeleted = undo.Pop();
-        if (prevDeleted) {
-            RemoveVirtualNode(normDirPath);
-        } else if (IsVirtualPathDeleted(normDirPath)) {
-            RestoreVirtualNode(normDirPath);
-        }
-        return true;
-    }
-
-    private bool RedoDirectory(string normDirPath) {
-        if (string.IsNullOrEmpty(normDirPath) || !dirRedoStacks.TryGetValue(normDirPath, out Stack<bool>? redo) || redo.Count == 0) {
-            return false;
-        }
-
-        bool curDeleted = IsVirtualPathDeleted(normDirPath);
-        if (!dirUndoStacks.TryGetValue(normDirPath, out Stack<bool>? undo)) {
-            undo = new Stack<bool>();
-            dirUndoStacks[normDirPath] = undo;
-        }
-        undo.Push(curDeleted);
-
-        bool nextDeleted = redo.Pop();
-        if (nextDeleted) {
-            RemoveVirtualNode(normDirPath);
-        } else if (IsVirtualPathDeleted(normDirPath)) {
-            RestoreVirtualNode(normDirPath);
         }
         return true;
     }
