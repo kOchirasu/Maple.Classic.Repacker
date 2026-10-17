@@ -10,27 +10,42 @@ public enum WzCanvasFormat {
 }
 
 public static class WzCanvasFormatExtensions {
-    public static string GetDisplayName(int format) => format switch {
-        1 => "BGRA4444 (16-bit)",
-        2 => "BGRA8888 (32-bit)",
-        513 => "BGR565 (16-bit)",
-        517 => "BGR565 Block16 (4-bit scale)",
-        1026 => "DXT3 / BC2",
-        2050 => "DXT5 / BC3",
-        _ => $"Format {format}",
+    public static WzCanvasFormat FromFormatCode(int format) => (WzCanvasFormat) format switch {
+        WzCanvasFormat.Bgra4444
+            or WzCanvasFormat.Bgra8888
+            or WzCanvasFormat.Bgr565
+            or WzCanvasFormat.Bgr565Block16
+            or WzCanvasFormat.Dxt3
+            or WzCanvasFormat.Dxt5 => (WzCanvasFormat) format,
+        _ => WzCanvasFormat.Bgra8888,
     };
 
-    public static int GetExpectedUncompressedLength(int width, int height, int format) {
+    public static string GetDisplayName(this WzCanvasFormat format) => format switch {
+        WzCanvasFormat.Bgra4444 => "BGRA4444 (16-bit)",
+        WzCanvasFormat.Bgra8888 => "BGRA8888 (32-bit)",
+        WzCanvasFormat.Bgr565 => "BGR565 (16-bit)",
+        WzCanvasFormat.Bgr565Block16 => "BGR565 Block16 (4-bit scale)",
+        WzCanvasFormat.Dxt3 => "DXT3 / BC2",
+        WzCanvasFormat.Dxt5 => "DXT5 / BC3",
+        _ => $"Format {(int) format}",
+    };
+
+    public static string GetDisplayName(int format) => ((WzCanvasFormat) format).GetDisplayName();
+
+    public static int GetExpectedUncompressedLength(int width, int height, WzCanvasFormat format) {
         if (width <= 0 || height <= 0) {
             return 0;
         }
         return format switch {
-            1 => width * height * 2,
-            2 => width * height * 4,
-            513 => width * height * 2,
-            517 => Math.Max(1, width >> 4) * Math.Max(1, height >> 4) * 2,
-            1026 or 2050 => ((width + 3) / 4) * ((height + 3) / 4) * 16,
+            WzCanvasFormat.Bgra4444 => width * height * 2,
+            WzCanvasFormat.Bgra8888 => width * height * 4,
+            WzCanvasFormat.Bgr565 => width * height * 2,
+            WzCanvasFormat.Bgr565Block16 => Math.Max(1, width >> 4) * Math.Max(1, height >> 4) * 2,
+            WzCanvasFormat.Dxt3 or WzCanvasFormat.Dxt5 => ((width + 3) / 4) * ((height + 3) / 4) * 16,
             _ => width * height * 4,
         };
     }
+
+    public static int GetExpectedUncompressedLength(int width, int height, int format) =>
+        GetExpectedUncompressedLength(width, height, (WzCanvasFormat) format);
 }

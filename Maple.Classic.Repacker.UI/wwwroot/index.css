@@ -260,6 +260,16 @@ body.resizing-row * {
     background-color: var(--accent-danger-bg);
 }
 
+.menu-dropdown button.restore-item,
+.context-menu button.restore-item {
+    color: var(--accent-green);
+}
+
+.menu-dropdown button.restore-item:hover,
+.context-menu button.restore-item:hover {
+    background-color: var(--accent-green-bg);
+}
+
 .menu-dropdown kbd,
 .context-menu kbd {
     font-family: var(--font-mono);
@@ -597,6 +607,20 @@ body.resizing-row * {
     color: var(--text-secondary);
 }
 
+.tree-row.deleted {
+    color: var(--accent-danger);
+}
+
+.tree-row.deleted .tree-name,
+.tree-row.deleted .tree-val-preview {
+    color: var(--accent-danger);
+    text-decoration: line-through;
+}
+
+.tree-row.deleted .tree-badge {
+    opacity: 0.7;
+}
+
 .tree-twisty {
     width: 16px;
     height: 16px;
@@ -705,6 +729,15 @@ body.resizing-row * {
     flex-shrink: 0;
 }
 
+.tree-del-dot {
+    margin-left: auto;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background-color: var(--accent-danger);
+    flex-shrink: 0;
+}
+
 /* Center Stage */
 .stage-header {
     display: flex;
@@ -780,9 +813,10 @@ body.resizing-row * {
 .canvas-stage-section {
     display: flex;
     flex-direction: column;
-    flex: 1 1 250px;
-    min-height: 220px;
+    flex: 1 1 0;
+    min-height: 140px;
     border-bottom: 1px solid var(--border-subtle);
+    overflow: hidden;
 }
 
 .canvas-toolbar {
@@ -885,8 +919,8 @@ body.resizing-row * {
 
 .canvas-viewport {
     position: relative;
-    flex: 1 1 auto;
-    min-height: 160px;
+    flex: 1 1 0;
+    min-height: 100px;
     overflow: hidden;
     display: flex;
     align-items: center;
@@ -956,6 +990,45 @@ body.resizing-row * {
     flex-shrink: 0;
 }
 
+.anim-play-btn {
+    width: 68px;
+    min-width: 68px;
+    padding: 0 8px;
+    justify-content: center;
+    gap: 5px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.anim-btn-icon {
+    font-size: 10px;
+    line-height: 1;
+}
+
+.anim-play-btn.play {
+    background-color: var(--accent-green-bg);
+    border-color: var(--accent-green-border);
+    color: var(--accent-green);
+}
+
+.anim-play-btn.play:hover:not(:disabled) {
+    background-color: rgba(46, 204, 80, 0.32);
+    border-color: var(--accent-green);
+    color: var(--accent-green);
+}
+
+.anim-play-btn.stop {
+    background-color: var(--accent-danger-bg);
+    border-color: var(--accent-danger-border);
+    color: var(--accent-danger);
+}
+
+.anim-play-btn.stop:hover:not(:disabled) {
+    background-color: rgba(239, 68, 68, 0.3);
+    border-color: var(--accent-danger);
+    color: var(--accent-danger);
+}
+
 .anim-frame-counter {
     font-family: var(--font-mono);
     font-size: 11.5px;
@@ -1001,10 +1074,14 @@ body.resizing-row * {
 
 /* Sound_DX8 Stage */
 .sound-stage-section {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 130px;
     padding: 14px;
     border-bottom: 1px solid var(--border-subtle);
     background-color: var(--bg-panel);
-    flex-shrink: 0;
+    overflow-y: auto;
 }
 
 .sound-card {
@@ -1078,15 +1155,21 @@ body.resizing-row * {
 
 /* String Stage */
 .string-stage-section {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 0;
+    min-height: 115px;
     padding: 14px;
     border-bottom: 1px solid var(--border-subtle);
     background-color: var(--bg-panel);
-    flex-shrink: 0;
+    overflow: hidden;
 }
 
 .string-card {
     display: flex;
     flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
     gap: 10px;
     padding: 12px 14px;
     border-radius: 6px;
@@ -1099,6 +1182,7 @@ body.resizing-row * {
     align-items: center;
     justify-content: space-between;
     gap: 10px;
+    flex-shrink: 0;
 }
 
 .string-title {
@@ -1131,18 +1215,21 @@ body.resizing-row * {
 }
 
 .string-viewer-box {
-    padding: 12px 14px;
+    margin: 0;
+    flex: 1 1 auto;
+    min-height: 48px;
+    padding: 10px 12px;
     border-radius: 4px;
     background-color: var(--bg-console);
-    border: 1px solid var(--border-subtle);
-    font-family: var(--font-sans);
-    font-size: 13.5px;
+    border: 1px solid var(--border-strong);
+    box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.35);
+    font-family: var(--font-mono);
+    font-size: 12.5px;
     line-height: 1.55;
     color: var(--text-bright);
     white-space: pre-wrap;
     word-break: break-word;
     user-select: text;
-    max-height: 200px;
     overflow-y: auto;
 }
 
@@ -1156,16 +1243,13 @@ body.resizing-row * {
     display: flex;
     flex-direction: column;
     flex: 1 1 0;
-    min-height: 115px;
+    min-height: 85px;
     overflow: hidden;
-}
-
-.canvas-stage-section:not(.hidden) ~ .children-table-section {
-    flex: 0 1 185px;
 }
 
 .children-table-section.minimized {
     flex: 0 0 auto !important;
+    height: auto !important;
     min-height: 0;
 }
 
@@ -1190,9 +1274,14 @@ body.resizing-row * {
 }
 
 .subbar-toggle-btn {
-    height: 21px;
-    padding: 0 7px;
-    font-size: 11px;
+    width: 22px;
+    height: 20px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    line-height: 1;
 }
 
 .section-subtitle {
@@ -1257,6 +1346,16 @@ body.resizing-row * {
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
+.data-table tbody tr.deleted-row td:first-child,
+.data-table tbody tr.deleted-row td:nth-child(3) {
+    color: var(--accent-danger);
+    text-decoration: line-through;
+}
+
+.data-table tbody tr.deleted-row .tree-badge {
+    opacity: 0.7;
+}
+
 .data-table tbody td {
     padding: 5px 10px;
     white-space: nowrap;
@@ -1266,6 +1365,44 @@ body.resizing-row * {
 }
 
 /* Right Pane: Property Inspector */
+.inspector-collapsed-strip {
+    display: none;
+    flex: 1 1 auto;
+    align-items: center;
+    justify-content: flex-start;
+    padding-top: 14px;
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    cursor: pointer;
+    user-select: none;
+}
+
+.inspector-collapsed-strip:hover {
+    color: var(--text-bright);
+    background-color: var(--bg-hover);
+}
+
+.inspector-pane.collapsed .pane-header {
+    justify-content: center;
+    padding: 0;
+}
+
+.inspector-pane.collapsed .pane-title-group,
+.inspector-pane.collapsed #btnRenameNode,
+.inspector-pane.collapsed #btnDeleteNode,
+.inspector-pane.collapsed .inspector-scroll {
+    display: none;
+}
+
+.inspector-pane.collapsed .inspector-collapsed-strip {
+    display: flex;
+}
+
 .inspector-scroll {
     flex: 1 1 auto;
     overflow: auto;
@@ -1603,6 +1740,8 @@ body.resizing-row * {
 .context-menu {
     position: fixed;
     min-width: 220px;
+    max-height: calc(100vh - 16px);
+    overflow-y: auto;
     background-color: var(--bg-elevated);
     border: 1px solid var(--border-focus);
     border-radius: 6px;

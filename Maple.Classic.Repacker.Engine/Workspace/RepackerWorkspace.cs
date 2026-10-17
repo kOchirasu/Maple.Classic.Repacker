@@ -535,12 +535,16 @@ public sealed class RepackerWorkspace : IDisposable {
                     NotifyStateChanged();
                 }
 
+                bool parentDeleted = session.IsVirtualPathDeleted(norm);
                 var result = new List<TreeNodeDto>(dirNode.Children.Count);
                 foreach (VirtualFsNode child in dirNode.Children) {
                     string childPath = string.IsNullOrEmpty(norm) ? child.Name : $"{norm}/{child.Name}";
+                    bool childDeleted = parentDeleted || child.IsDeleted;
                     if (child.IsDir) {
                         (int d, int i) = ArchiveSession.CountVirtualRecursive(child);
-                        (bool dirModified, bool dirAdded) = session.GetDirectoryChangeState(childPath, child);
+                        RepackerChangeState dirState = childDeleted
+                            ? RepackerChangeState.Deleted
+                            : session.GetDirectoryChangeState(childPath, child);
                         result.Add(new TreeNodeDto(
                             session.ArchiveId,
                             childPath,
@@ -551,13 +555,11 @@ public sealed class RepackerWorkspace : IDisposable {
                             "DIR",
                             child.Children.Count > 0,
                             child.Children.Count,
-                            dirModified,
-                            0,
-                            dirAdded));
+                            dirState,
+                            0));
                     } else {
                         int sizeBytes = session.GetImageSize(childPath);
-                        bool imgAdded = session.IsImageAdded(childPath);
-                        bool imgMod = !imgAdded && session.IsImageModified(childPath);
+                        RepackerChangeState imgState = session.GetImageChangeState(childPath, childDeleted);
                         result.Add(new TreeNodeDto(
                             session.ArchiveId,
                             childPath,
@@ -568,9 +570,8 @@ public sealed class RepackerWorkspace : IDisposable {
                             "IMG",
                             true,
                             0,
-                            imgMod,
-                            sizeBytes,
-                            imgAdded));
+                            imgState,
+                            sizeBytes));
                     }
                 }
                 return [.. result];
@@ -578,11 +579,16 @@ public sealed class RepackerWorkspace : IDisposable {
 
             // 2. Inside an .img property tree
             try {
+                bool imgDeleted = session.IsVirtualPathDeleted(imgPath);
                 WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue? target = ResolvePropertyNode(imgRoot, subPath);
+                (WzValue? target, bool targetDeleted) = string.IsNullOrEmpty(subPath)
+                    ? (imgRoot, imgDeleted)
+                    : session.ResolvePropertyOrDeleted(imgPath, imgRoot, subPath);
                 if (target is null) {
                     return [];
                 }
+
+                bool effectiveParentDeleted = imgDeleted || targetDeleted;
 
                 if (target is WzValue.Convex(var convexItems)) {
                     var convexNodes = new List<TreeNodeDto>(convexItems.Count);
@@ -591,23 +597,23 @@ public sealed class RepackerWorkspace : IDisposable {
                         string itemName = i.ToString(CultureInfo.InvariantCulture);
                         string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
                         string itemPath = $"{imgPath}/{itemSubPath}";
-                        (bool itemMod, bool itemAdded) = EvaluatePropertyChangeState(session, imgPath, itemSubPath, item);
-                        convexNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, itemPath, itemName, item, itemMod, itemAdded));
+                        RepackerChangeState itemState = EvaluatePropertyChangeState(session, imgPath, itemSubPath, item, effectiveParentDeleted);
+                        convexNodes.Add(BuildPropertyTreeNodeDto(session, imgPath, itemSubPath, itemPath, itemName, item, itemState));
                     }
                     return [.. convexNodes];
                 }
 
-                IReadOnlyList<WzProperty>? props = target.Children;
-                if (props is null || props.Count == 0) {
+                List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> mergedProps =
+                    BuildMergedChildProperties(session, imgPath, subPath, target, effectiveParentDeleted);
+                if (mergedProps.Count == 0) {
                     return [];
                 }
 
-                var propNodes = new List<TreeNodeDto>(props.Count);
-                foreach (WzProperty prop in props) {
-                    string propSubPath = string.IsNullOrEmpty(subPath) ? prop.Name : $"{subPath}/{prop.Name}";
+                var propNodes = new List<TreeNodeDto>(mergedProps.Count);
+                foreach ((string propName, string propSubPath, WzValue propVal, bool propDeleted) in mergedProps) {
                     string propPath = $"{imgPath}/{propSubPath}";
-                    (bool propMod, bool propAdded) = EvaluatePropertyChangeState(session, imgPath, propSubPath, prop.Value);
-                    propNodes.Add(BuildPropertyTreeNodeDto(session.ArchiveId, propPath, prop.Name, prop.Value, propMod, propAdded));
+                    RepackerChangeState propState = EvaluatePropertyChangeState(session, imgPath, propSubPath, propVal, propDeleted);
+                    propNodes.Add(BuildPropertyTreeNodeDto(session, imgPath, propSubPath, propPath, propName, propVal, propState));
                 }
                 return [.. propNodes];
             } catch {
@@ -641,6 +647,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
 
                 bool isRoot = string.IsNullOrEmpty(norm);
+                bool isDirDeleted = !isRoot && session.IsVirtualPathDeleted(norm);
                 RepackerNodeKind nodeKind = isRoot ? RepackerNodeKind.Archive : RepackerNodeKind.Directory;
                 string badge = isRoot ? "WZ" : "DIR";
                 string displayName = isRoot ? session.Name : dirNode.Name;
@@ -649,8 +656,12 @@ public sealed class RepackerWorkspace : IDisposable {
                 var rows = new List<SubPropertyRowDto>(dirNode.Children.Count);
                 foreach (VirtualFsNode c in dirNode.Children) {
                     string cPath = isRoot ? c.Name : $"{norm}/{c.Name}";
+                    bool cDeleted = isDirDeleted || c.IsDeleted;
                     if (c.IsDir) {
                         (int cd, int ci) = ArchiveSession.CountVirtualRecursive(c);
+                        RepackerChangeState cState = cDeleted
+                            ? RepackerChangeState.Deleted
+                            : session.GetDirectoryChangeState(cPath, c);
                         rows.Add(new SubPropertyRowDto(
                             c.Name,
                             cPath,
@@ -658,9 +669,12 @@ public sealed class RepackerWorkspace : IDisposable {
                             RepackerPropertyKind.None,
                             "DIR",
                             $"{cd} dirs, {ci} images",
-                            c.Children.Count));
+                            c.Children.Count,
+                            0,
+                            cState));
                     } else {
                         int sz = session.GetImageSize(cPath);
+                        RepackerChangeState cState = session.GetImageChangeState(cPath, cDeleted);
                         rows.Add(new SubPropertyRowDto(
                             c.Name,
                             cPath,
@@ -669,7 +683,8 @@ public sealed class RepackerWorkspace : IDisposable {
                             "IMG",
                             FormatByteSize(sz),
                             0,
-                            sz));
+                            sz,
+                            cState));
                     }
                 }
 
@@ -687,9 +702,15 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
                 """;
 
-                (bool dirMod, bool dirAdded) = isRoot
-                    ? (!session.IsUserCreatedArchive && session.IsModified, session.IsUserCreatedArchive)
-                    : session.GetDirectoryChangeState(norm, dirNode);
+                RepackerChangeState dirChangeState = isDirDeleted
+                    ? RepackerChangeState.Deleted
+                    : isRoot
+                        ? (session.IsUserCreatedArchive
+                            ? RepackerChangeState.Added
+                            : session.IsModified
+                                ? RepackerChangeState.Modified
+                                : RepackerChangeState.Unchanged)
+                        : session.GetDirectoryChangeState(norm, dirNode);
 
                 return new NodeInspectionDto(
                     true,
@@ -709,7 +730,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     null,
                     dirNode.Children.Count,
                     0,
-                    dirMod,
+                    dirChangeState,
                     false,
                     false,
                     summaryJson,
@@ -718,18 +739,21 @@ public sealed class RepackerWorkspace : IDisposable {
                     [],
                     null,
                     null,
-                    [],
-                    dirAdded);
+                    []);
             }
 
             // Case 2: Image node or Property inside an Image
             try {
+                bool imgDeleted = session.IsVirtualPathDeleted(imgPath);
                 WzValue imgRoot = session.GetOrParseImage(imgPath);
                 bool isImageRoot = string.IsNullOrEmpty(subPath);
-                WzValue? target = isImageRoot ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
+                (WzValue? target, bool propDeleted) = isImageRoot
+                    ? (imgRoot, imgDeleted)
+                    : session.ResolvePropertyOrDeleted(imgPath, imgRoot, subPath);
                 if (target is null) {
                     return ErrorInspection(archiveId, norm, $"Property \"{subPath}\" not found inside \"{imgPath}\".");
                 }
+                bool isNodeDeleted = imgDeleted || propDeleted;
 
                 string leafName = isImageRoot
                     ? Path.GetFileName(imgPath)
@@ -746,14 +770,16 @@ public sealed class RepackerWorkspace : IDisposable {
                 double? numFloat = target is WzValue.Float or WzValue.Double ? target.AsDouble() : null;
                 VectorPointDto? vecDto = target is WzValue.Vector(var vx, var vy) ? new VectorPointDto(vx, vy) : null;
 
-                SubPropertyRowDto[] childRows = BuildChildRows(imgPath, subPath, target);
+                SubPropertyRowDto[] childRows = BuildChildRows(session, imgPath, subPath, target, isNodeDeleted);
                 int ownChildCount = childRows.Length;
                 if (ownChildCount == 0 && !isImageRoot && target is not WzValue.Object and not WzValue.Convex) {
                     int lastSlash = subPath.LastIndexOf('/');
                     string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-                    WzValue? parentVal = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
+                    (WzValue? parentVal, bool parentDel) = string.IsNullOrEmpty(parentSubPath)
+                        ? (imgRoot, imgDeleted)
+                        : session.ResolvePropertyOrDeleted(imgPath, imgRoot, parentSubPath);
                     if (parentVal is not null) {
-                        childRows = BuildChildRows(imgPath, parentSubPath, parentVal);
+                        childRows = BuildChildRows(session, imgPath, parentSubPath, parentVal, imgDeleted || parentDel);
                     }
                 }
 
@@ -865,7 +891,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     : rawSlice.Length;
 
                 string jsonPreview = target.ToJson();
-                (bool nodeMod, bool nodeAdded) = EvaluatePropertyChangeState(session, imgPath, subPath, target);
+                RepackerChangeState nodeChangeState = EvaluatePropertyChangeState(session, imgPath, subPath, target, isNodeDeleted);
 
                 return new NodeInspectionDto(
                     true,
@@ -885,7 +911,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     vecDto,
                     ownChildCount,
                     sizeBytes,
-                    nodeMod,
+                    nodeChangeState,
                     session.CanUndo(imgPath),
                     session.CanRedo(imgPath),
                     jsonPreview,
@@ -894,8 +920,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     animFrames,
                     soundDto,
                     resolvedUolPath,
-                    rawSlice,
-                    nodeAdded);
+                    rawSlice);
             } catch (Exception ex) {
                 return ErrorInspection(archiveId, norm, ex.Message);
             }
@@ -971,7 +996,7 @@ public sealed class RepackerWorkspace : IDisposable {
         int? vecX = null,
         int? vecY = null,
         byte[]? binaryPayload = null,
-        int? canvasFormat = null) {
+        WzCanvasFormat? canvasFormat = null) {
         lock (syncLock) {
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
@@ -1008,13 +1033,13 @@ public sealed class RepackerWorkspace : IDisposable {
 
                 WzValue newVal;
                 if (kind == RepackerPropertyKind.Canvas) {
-                    int fmt = canvasFormat ?? (int) WzCanvasFormat.Bgra8888;
+                    WzCanvasFormat fmt = canvasFormat ?? WzCanvasFormat.Bgra8888;
                     if (binaryPayload is { Length: > 0 }) {
                         (int w, int h, byte[] comp) = WzCanvasCodec.EncodePngToCanvasPayload(binaryPayload, fmt);
                         newVal = new WzValue.Canvas(
                             w,
                             h,
-                            fmt,
+                            (int) fmt,
                             comp,
                             [new WzProperty("origin", (vecX ?? w / 2, vecY ?? h))]);
                     } else {
@@ -1024,7 +1049,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         newVal = new WzValue.Canvas(
                             w,
                             h,
-                            fmt,
+                            (int) fmt,
                             comp,
                             [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
                     }
@@ -1241,7 +1266,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 if (!session.RemoveVirtualNode(norm)) {
                     return (false, $"Could not delete node \"{norm}\".", string.Empty);
                 }
-                SelectedNodePath = parentPath;
+                SelectedNodePath = norm;
                 AppendLogUnsafe($"Deleted \"{norm}\" from \"{session.Name}\".", RepackerLogLevel.Info);
                 NotifyStateChanged();
                 return (true, null, parentPath);
@@ -1249,17 +1274,93 @@ public sealed class RepackerWorkspace : IDisposable {
 
             try {
                 WzValue imgRoot = session.GetOrParseImage(imgPath);
-                session.RecordUndoSnapshot(imgPath);
+                int subSlash = subPath.LastIndexOf('/');
+                string parentSubPath = subSlash >= 0 ? subPath[..subSlash] : string.Empty;
+                string leafName = subSlash >= 0 ? subPath[(subSlash + 1)..] : subPath;
 
-                if (!RemovePropertyOrConvexElement(imgRoot, subPath)) {
+                WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
+                if (parent is null) {
                     return (false, $"Property \"{subPath}\" not found.", string.Empty);
                 }
 
+                if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int cIdx) && cIdx >= 0 && cIdx < items.Count) {
+                    session.RecordUndoSnapshot(imgPath);
+                    items.RemoveAt(cIdx);
+                    session.MarkImageModified(imgPath);
+                    SelectedNodePath = parentPath;
+                    AppendLogUnsafe($"Deleted property \"{norm}\".", RepackerLogLevel.Info);
+                    NotifyStateChanged();
+                    return (true, null, parentPath);
+                }
+
+                List<WzProperty>? kids = GetMutablePropertyList(parent);
+                if (kids is null) {
+                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
+                }
+
+                int propIdx = kids.FindIndex(p => p.Name == leafName);
+                if (propIdx < 0) {
+                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
+                }
+
+                WzValue deletedVal = CloneWzValue(kids[propIdx].Value);
+                session.RecordUndoSnapshot(imgPath);
+                kids.RemoveAt(propIdx);
+                session.RecordDeletedProperty(imgPath, subPath, parentSubPath, leafName, propIdx, deletedVal);
+
                 session.MarkImageModified(imgPath);
-                SelectedNodePath = parentPath;
+                SelectedNodePath = norm;
                 AppendLogUnsafe($"Deleted property \"{norm}\".", RepackerLogLevel.Info);
                 NotifyStateChanged();
                 return (true, null, parentPath);
+            } catch (Exception ex) {
+                return (false, ex.Message, string.Empty);
+            }
+        }
+    }
+
+    public (bool Ok, string? Error, string RestoredPath) RestoreNode(string archiveId, string path) {
+        lock (syncLock) {
+            ArchiveSession? session = FindSessionUnsafe(archiveId);
+            if (session is null) {
+                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
+            }
+
+            string norm = ArchiveSession.NormalizePath(path);
+            if (string.IsNullOrEmpty(norm)) {
+                return (false, "Select a deleted node to restore.", string.Empty);
+            }
+
+            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
+            if (imgPath is null || string.IsNullOrEmpty(subPath)) {
+                if (!session.RestoreVirtualNode(norm)) {
+                    return (false, $"Node \"{norm}\" is not deleted or could not be restored.", string.Empty);
+                }
+                SelectedNodePath = norm;
+                AppendLogUnsafe($"Restored \"{norm}\" in \"{session.Name}\".", RepackerLogLevel.Success);
+                NotifyStateChanged();
+                return (true, null, norm);
+            }
+
+            try {
+                if (session.IsVirtualPathDeleted(imgPath)) {
+                    session.RestoreVirtualNode(imgPath);
+                }
+
+                WzValue imgRoot = session.GetOrParseImage(imgPath);
+                session.RecordUndoSnapshot(imgPath);
+
+                (bool restored, string? restoredSubPath) = session.RestoreDeletedProperty(imgPath, imgRoot, subPath);
+                if (!restored) {
+                    return (false, $"Property \"{subPath}\" is not deleted or could not be restored.", string.Empty);
+                }
+
+                session.MarkImageModified(imgPath);
+                string finalPath = string.IsNullOrEmpty(restoredSubPath) ? norm : $"{imgPath}/{restoredSubPath}";
+                SelectedNodePath = finalPath;
+                AppendLogUnsafe($"Restored property \"{finalPath}\".", RepackerLogLevel.Success);
+                NotifyStateChanged();
+                return (true, null, finalPath);
             } catch (Exception ex) {
                 return (false, ex.Message, string.Empty);
             }
@@ -1493,7 +1594,7 @@ public sealed class RepackerWorkspace : IDisposable {
         string archiveId,
         string path,
         byte[] pngBytes,
-        int? format = null,
+        WzCanvasFormat? format = null,
         int? originX = null,
         int? originY = null,
         int? delayMs = null) {
@@ -1513,13 +1614,13 @@ public sealed class RepackerWorkspace : IDisposable {
                     return (false, $"Property \"{subPath}\" is not a Canvas.");
                 }
 
-                int targetFormat = format ?? (canvas.Format > 0 ? canvas.Format : (int) WzCanvasFormat.Bgra8888);
+                WzCanvasFormat targetFormat = format ?? WzCanvasFormatExtensions.FromFormatCode(canvas.Format);
                 (int width, int height, byte[] compressed) = WzCanvasCodec.EncodePngToCanvasPayload(pngBytes, targetFormat);
 
                 session.RecordUndoSnapshot(imgPath);
                 canvas.Width = width;
                 canvas.Height = height;
-                canvas.Format = targetFormat;
+                canvas.Format = (int) targetFormat;
                 canvas.Payload = compressed;
                 canvas.Properties.RemoveAll(static p => p.Name is "_outlink" or "_inlink");
 
@@ -1531,7 +1632,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
 
                 session.MarkImageModified(imgPath);
-                AppendLogUnsafe($"Replaced Canvas \"{path}\" with {width}x{height} PNG ({WzCanvasFormatExtensions.GetDisplayName(targetFormat)}, {compressed.Length:N0} B).", RepackerLogLevel.Success);
+                AppendLogUnsafe($"Replaced Canvas \"{path}\" with {width}x{height} PNG ({targetFormat.GetDisplayName()}, {compressed.Length:N0} B).", RepackerLogLevel.Success);
                 NotifyStateChanged();
                 return (true, null);
             } catch (Exception ex) {
@@ -1540,7 +1641,7 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
-    public (bool Ok, string? Error) ChangeCanvasFormat(string archiveId, string path, int newFormat) {
+    public (bool Ok, string? Error) ChangeCanvasFormat(string archiveId, string path, WzCanvasFormat newFormat) {
         lock (syncLock) {
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
@@ -1561,11 +1662,11 @@ public sealed class RepackerWorkspace : IDisposable {
                 byte[] reencoded = WzCanvasCodec.EncodeFromRgba(canvas.Width, canvas.Height, newFormat, rgba);
 
                 session.RecordUndoSnapshot(imgPath);
-                canvas.Format = newFormat;
+                canvas.Format = (int) newFormat;
                 canvas.Payload = reencoded;
                 session.MarkImageModified(imgPath);
 
-                AppendLogUnsafe($"Converted Canvas \"{path}\" to {WzCanvasFormatExtensions.GetDisplayName(newFormat)} ({reencoded.Length:N0} B).", RepackerLogLevel.Success);
+                AppendLogUnsafe($"Converted Canvas \"{path}\" to {newFormat.GetDisplayName()} ({reencoded.Length:N0} B).", RepackerLogLevel.Success);
                 NotifyStateChanged();
                 return (true, null);
             } catch (Exception ex) {
@@ -1677,6 +1778,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     void WalkDir(VirtualFsNode d, string prefix) {
                         session.EnsureDirectoryLinked(d);
                         foreach (VirtualFsNode c in d.Children) {
+                            if (c.IsDeleted) continue;
                             string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
                             if (c.IsDir) {
                                 WalkDir(c, full);
@@ -1771,7 +1873,7 @@ public sealed class RepackerWorkspace : IDisposable {
     public (bool Ok, string? Error, string FileName, string MimeType, byte[] Data) ExportNode(
         string archiveId,
         string? path,
-        string? format = null) {
+        RepackerExportFormat format = RepackerExportFormat.Auto) {
         lock (syncLock) {
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
@@ -1779,9 +1881,8 @@ public sealed class RepackerWorkspace : IDisposable {
             }
 
             string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
-            string fmt = (format ?? "auto").Trim().ToLowerInvariant();
 
-            if (string.IsNullOrEmpty(norm) || fmt == "wz") {
+            if (string.IsNullOrEmpty(norm) || format == RepackerExportFormat.Wz) {
                 byte[] wzBytes = session.BuildArchiveBytes();
                 return (true, null, session.Name, "application/octet-stream", wzBytes);
             }
@@ -1803,13 +1904,13 @@ public sealed class RepackerWorkspace : IDisposable {
                     ? Path.GetFileNameWithoutExtension(imgPath)
                     : subPath.Replace('/', '_');
 
-                if (fmt == "img" || (fmt == "auto" && isImgRoot)) {
+                if (format == RepackerExportFormat.Img || (format == RepackerExportFormat.Auto && isImgRoot)) {
                     byte[] imgBytes = target.ToBytes();
                     string imgFileName = baseName.EndsWith(".img", StringComparison.OrdinalIgnoreCase) ? baseName : $"{baseName}.img";
                     return (true, null, imgFileName, "application/octet-stream", imgBytes);
                 }
 
-                if (fmt == "json") {
+                if (format == RepackerExportFormat.Json) {
                     byte[] jsonBytes = Encoding.UTF8.GetBytes(target.ToJson());
                     return (true, null, $"{baseName}.json", "application/json", jsonBytes);
                 }
@@ -1822,12 +1923,12 @@ public sealed class RepackerWorkspace : IDisposable {
                     }
                 }
 
-                if (target is WzValue.Canvas canvas && (fmt is "png" or "auto")) {
+                if (target is WzValue.Canvas canvas && format is RepackerExportFormat.Png or RepackerExportFormat.Auto) {
                     CanvasPreviewDto preview = BuildCanvasPreviewUnsafe(session, imgPath, imgRoot, canvas);
                     return (true, null, $"{baseName}.png", "image/png", preview.PngBytes);
                 }
 
-                if (target is WzValue.Sound sound && (fmt is "audio" or "mp3" or "wav" or "auto")) {
+                if (target is WzValue.Sound sound && format is RepackerExportFormat.Audio or RepackerExportFormat.Auto) {
                     ExtractedSoundData audio = WzSoundCodec.ExtractAudioStream(sound);
                     return (true, null, $"{baseName}.{audio.Extension}", audio.MimeType, audio.AudioBytes);
                 }
@@ -1845,7 +1946,7 @@ public sealed class RepackerWorkspace : IDisposable {
         string archiveId,
         string? path,
         string outputDirectory,
-        string mode = "png") {
+        RepackerBatchExportMode mode = RepackerBatchExportMode.Png) {
         if (string.IsNullOrWhiteSpace(outputDirectory)) {
             return (false, "Output directory is required.", 0);
         }
@@ -1859,7 +1960,6 @@ public sealed class RepackerWorkspace : IDisposable {
             try {
                 string fullOutDir = Path.GetFullPath(outputDirectory.Trim());
                 Directory.CreateDirectory(fullOutDir);
-                string cleanMode = (mode ?? "png").Trim().ToLowerInvariant();
                 string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
                 (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
 
@@ -1871,7 +1971,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         fullOutDir,
                         currentImgPath.Replace('/', Path.DirectorySeparatorChar));
 
-                    if (cleanMode == "img") {
+                    if (mode == RepackerBatchExportMode.Img) {
                         string destFile = imgRelDir;
                         Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? fullOutDir);
                         System.IO.File.WriteAllBytes(destFile, imgRoot.ToBytes());
@@ -1879,7 +1979,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         return;
                     }
 
-                    if (cleanMode == "json") {
+                    if (mode == RepackerBatchExportMode.Json) {
                         WzValue targetNode = string.IsNullOrEmpty(startSubPath)
                             ? imgRoot
                             : ResolvePropertyNode(imgRoot, startSubPath) ?? imgRoot;
@@ -1897,14 +1997,14 @@ public sealed class RepackerWorkspace : IDisposable {
                         : ResolvePropertyNode(imgRoot, startSubPath) ?? imgRoot;
 
                     void WalkProperties(WzValue node, string propPrefix) {
-                        if (node is WzValue.Canvas canvas && cleanMode is "png" or "all") {
+                        if (node is WzValue.Canvas canvas && mode is RepackerBatchExportMode.Png or RepackerBatchExportMode.All) {
                             CanvasPreviewDto preview = BuildCanvasPreviewUnsafe(session, currentImgPath, imgRoot, canvas);
                             string safeRel = string.IsNullOrEmpty(propPrefix) ? "canvas" : propPrefix.Replace('/', Path.DirectorySeparatorChar);
                             string destFile = Path.Combine(imgRelDir, $"{safeRel}.png");
                             Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? imgRelDir);
                             System.IO.File.WriteAllBytes(destFile, preview.PngBytes);
                             exported++;
-                        } else if (node is WzValue.Sound sound && cleanMode is "sound" or "audio" or "all") {
+                        } else if (node is WzValue.Sound sound && mode is RepackerBatchExportMode.Sound or RepackerBatchExportMode.All) {
                             ExtractedSoundData audio = WzSoundCodec.ExtractAudioStream(sound);
                             string safeRel = string.IsNullOrEmpty(propPrefix) ? "sound" : propPrefix.Replace('/', Path.DirectorySeparatorChar);
                             string destFile = Path.Combine(imgRelDir, $"{safeRel}.{audio.Extension}");
@@ -1935,6 +2035,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     void WalkDirs(VirtualFsNode d, string prefix) {
                         session.EnsureDirectoryLinked(d);
                         foreach (VirtualFsNode c in d.Children) {
+                            if (c.IsDeleted) continue;
                             string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
                             if (c.IsDir) {
                                 WalkDirs(c, full);
@@ -1947,7 +2048,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     WalkDirs(dir, norm);
                 }
 
-                AppendLogUnsafe($"Batch-exported {exported} file(s) ({cleanMode.ToUpperInvariant()}) to \"{fullOutDir}\".", RepackerLogLevel.Success);
+                AppendLogUnsafe($"Batch-exported {exported} file(s) ({mode}) to \"{fullOutDir}\".", RepackerLogLevel.Success);
                 NotifyStateChanged();
                 return (true, null, exported);
             } catch (Exception ex) {
@@ -2000,11 +2101,12 @@ public sealed class RepackerWorkspace : IDisposable {
         }
 
         byte[] pngBytes = WzCanvasCodec.DecodeToPng(visualCanvas);
+        WzCanvasFormat canvasFormat = WzCanvasFormatExtensions.FromFormatCode(visualCanvas.Format);
         return new CanvasPreviewDto(
             visualCanvas.Width,
             visualCanvas.Height,
-            visualCanvas.Format,
-            WzCanvasFormatExtensions.GetDisplayName(visualCanvas.Format),
+            canvasFormat,
+            canvasFormat.GetDisplayName(),
             visualCanvas.Payload.Length,
             pngBytes,
             origin,
@@ -2300,25 +2402,6 @@ public sealed class RepackerWorkspace : IDisposable {
         return true;
     }
 
-    private static bool RemovePropertyOrConvexElement(WzValue imgRoot, string subPath) {
-        subPath = subPath.Trim('/');
-        if (string.IsNullOrEmpty(subPath)) {
-            return false;
-        }
-
-        int lastSlash = subPath.LastIndexOf('/');
-        string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-        string leafName = lastSlash >= 0 ? subPath[(lastSlash + 1)..] : subPath;
-
-        WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
-        if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int idx) && idx >= 0 && idx < items.Count) {
-            items.RemoveAt(idx);
-            return true;
-        }
-
-        return imgRoot.Remove(subPath);
-    }
-
     private static List<WzProperty>? GetMutablePropertyList(WzValue? val) => val switch {
         WzValue.Object(var props) => props,
         WzValue.Canvas { Properties: var props } => props,
@@ -2354,44 +2437,78 @@ public sealed class RepackerWorkspace : IDisposable {
         };
     }
 
-    private static (bool IsModified, bool IsAdded) EvaluatePropertyChangeState(
+    private static RepackerChangeState EvaluatePropertyChangeState(
         ArchiveSession session,
         string imgPath,
         string propSubPath,
-        WzValue propVal) {
+        WzValue propVal,
+        bool isDeleted = false) {
+        if (isDeleted) {
+            return RepackerChangeState.Deleted;
+        }
         if (session.IsImageAdded(imgPath)) {
-            return (false, true);
+            return RepackerChangeState.Added;
         }
         if (!session.IsImageModified(imgPath)) {
-            return (false, false);
+            return RepackerChangeState.Unchanged;
         }
         if (!session.TryGetBaselineImage(imgPath, out WzValue? baselineRoot) || baselineRoot is null) {
-            return (true, false);
+            return RepackerChangeState.Modified;
         }
         if (string.IsNullOrEmpty(propSubPath)) {
-            return (!propVal.Equals(baselineRoot), false);
+            return !propVal.Equals(baselineRoot) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
         }
         WzValue? origProp = ResolvePropertyNode(baselineRoot, propSubPath);
         if (origProp is null) {
-            return (false, true);
+            return RepackerChangeState.Added;
         }
-        return (!propVal.Equals(origProp), false);
+        return !propVal.Equals(origProp) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
+    }
+
+    private static List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> BuildMergedChildProperties(
+        ArchiveSession session,
+        string imgPath,
+        string parentSubPath,
+        WzValue target,
+        bool parentDeleted) {
+        var list = new List<(string Name, string SubPath, WzValue Value, bool IsDeleted)>();
+        IReadOnlyList<WzProperty>? props = target.Children;
+        if (props is not null) {
+            foreach (WzProperty prop in props) {
+                string propSubPath = string.IsNullOrEmpty(parentSubPath) ? prop.Name : $"{parentSubPath}/{prop.Name}";
+                list.Add((prop.Name, propSubPath, prop.Value, parentDeleted));
+            }
+        }
+
+        IReadOnlyList<DeletedPropertyEntry> deletedProps = session.GetDeletedDirectChildProperties(imgPath, parentSubPath);
+        foreach (DeletedPropertyEntry del in deletedProps) {
+            if (list.Any(item => string.Equals(item.Name, del.Name, StringComparison.Ordinal))) {
+                continue;
+            }
+            int insertIdx = Math.Clamp(del.OriginalIndex, 0, list.Count);
+            list.Insert(insertIdx, (del.Name, del.SubPath, del.Value, true));
+        }
+
+        return list;
     }
 
     private static TreeNodeDto BuildPropertyTreeNodeDto(
-        string archiveId,
+        ArchiveSession session,
+        string imgPath,
+        string propSubPath,
         string path,
         string name,
         WzValue val,
-        bool isModified,
-        bool isAdded = false) {
+        RepackerChangeState changeState = RepackerChangeState.Unchanged) {
         (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(val);
-        int childCount = val switch {
+        int liveChildCount = val switch {
             WzValue.Object(var p) => p.Count,
             WzValue.Canvas c => c.Properties.Count,
             WzValue.Convex(var items) => items.Count,
             _ => 0,
         };
+        int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
+        int childCount = liveChildCount + deletedChildCount;
         int sizeBytes = val switch {
             WzValue.Canvas c => c.Payload.Length,
             WzValue.Sound s => s.DataLength,
@@ -2400,7 +2517,7 @@ public sealed class RepackerWorkspace : IDisposable {
         };
 
         return new TreeNodeDto(
-            archiveId,
+            session.ArchiveId,
             path,
             name,
             RepackerNodeKind.Property,
@@ -2409,41 +2526,51 @@ public sealed class RepackerWorkspace : IDisposable {
             badge,
             childCount > 0,
             childCount,
-            isModified,
-            sizeBytes,
-            isAdded);
+            changeState,
+            sizeBytes);
     }
 
-    private static SubPropertyRowDto[] BuildChildRows(string imgPath, string subPath, WzValue target) {
+    private static SubPropertyRowDto[] BuildChildRows(
+        ArchiveSession session,
+        string imgPath,
+        string subPath,
+        WzValue target,
+        bool parentDeleted = false) {
         if (target is WzValue.Convex(var items)) {
             var rows = new SubPropertyRowDto[items.Count];
             for (int i = 0; i < items.Count; i++) {
                 string itemName = i.ToString(CultureInfo.InvariantCulture);
-                string itemPath = string.IsNullOrEmpty(subPath) ? $"{imgPath}/{itemName}" : $"{imgPath}/{subPath}/{itemName}";
+                string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
+                string itemPath = $"{imgPath}/{itemSubPath}";
                 (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(items[i]);
-                rows[i] = new SubPropertyRowDto(itemName, itemPath, RepackerNodeKind.Property, pk, badge, disp, 0);
+                RepackerChangeState itemState = EvaluatePropertyChangeState(session, imgPath, itemSubPath, items[i], parentDeleted);
+                rows[i] = new SubPropertyRowDto(itemName, itemPath, RepackerNodeKind.Property, pk, badge, disp, 0, 0, itemState);
             }
             return rows;
         }
 
-        IReadOnlyList<WzProperty>? props = target.Children;
-        if (props is null || props.Count == 0) {
+        List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> mergedProps =
+            BuildMergedChildProperties(session, imgPath, subPath, target, parentDeleted);
+        if (mergedProps.Count == 0) {
             return [];
         }
 
-        var output = new SubPropertyRowDto[props.Count];
-        for (int i = 0; i < props.Count; i++) {
-            WzProperty p = props[i];
-            string pPath = string.IsNullOrEmpty(subPath) ? $"{imgPath}/{p.Name}" : $"{imgPath}/{subPath}/{p.Name}";
-            (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(p.Value);
-            int childCount = p.Value.Children?.Count ?? (p.Value is WzValue.Convex(var ci) ? ci.Count : 0);
-            int sz = p.Value switch {
+        var output = new SubPropertyRowDto[mergedProps.Count];
+        for (int i = 0; i < mergedProps.Count; i++) {
+            (string pName, string pSubPath, WzValue pVal, bool pDeleted) = mergedProps[i];
+            string pPath = $"{imgPath}/{pSubPath}";
+            (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(pVal);
+            int liveChildCount = pVal.Children?.Count ?? (pVal is WzValue.Convex(var ci) ? ci.Count : 0);
+            int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, pSubPath).Count;
+            int childCount = liveChildCount + deletedChildCount;
+            int sz = pVal switch {
                 WzValue.Canvas c => c.Payload.Length,
                 WzValue.Sound s => s.DataLength,
                 WzValue.RawData r => r.DataLength,
                 _ => 0,
             };
-            output[i] = new SubPropertyRowDto(p.Name, pPath, RepackerNodeKind.Property, pk, badge, disp, childCount, sz);
+            RepackerChangeState pState = EvaluatePropertyChangeState(session, imgPath, pSubPath, pVal, pDeleted);
+            output[i] = new SubPropertyRowDto(pName, pPath, RepackerNodeKind.Property, pk, badge, disp, childCount, sz, pState);
         }
         return output;
     }
@@ -2526,6 +2653,7 @@ public sealed class RepackerWorkspace : IDisposable {
         session.EnsureDirectoryLinked(dir);
         foreach (VirtualFsNode child in dir.Children) {
             if (results.Count >= maxResults) return;
+            if (child.IsDeleted) continue;
             string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
 
             if (child.IsDir) {
@@ -2647,7 +2775,7 @@ public sealed class RepackerWorkspace : IDisposable {
             null,
             0,
             0,
-            false,
+            RepackerChangeState.Unchanged,
             false,
             false,
             "{}",

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Maple.Classic.Repacker.Engine.Models;
 
 namespace Maple.Classic.Repacker.UI;
 
@@ -14,14 +15,15 @@ public sealed record SavedWindowBoundsDto {
 public sealed record SavedRepackerLayoutDto {
     public double? TreePaneWidth { get; set; }
     public double? InspectorPaneWidth { get; set; }
+    public bool? InspectorCollapsed { get; set; }
     public double? WorkbenchHeight { get; set; }
     public bool? WorkbenchCollapsed { get; set; }
 }
 
 public sealed record SavedRepackerUiStateDto {
     public SavedRepackerLayoutDto? Layout { get; set; }
-    public string? ActiveWorkbenchTab { get; set; }
-    public string? CanvasBackground { get; set; }
+    public RepackerWorkbenchTab? ActiveWorkbenchTab { get; set; }
+    public RepackerCanvasBackground? CanvasBackground { get; set; }
     public bool? ShowOriginCrosshair { get; set; }
     public bool? ShowVectorBounds { get; set; }
     public bool? ShowPixelGrid { get; set; }
@@ -123,6 +125,7 @@ public sealed class UserSettingsStore {
                 mergedLayout = baseLayout with {
                     TreePaneWidth = patch.Layout.TreePaneWidth ?? baseLayout.TreePaneWidth,
                     InspectorPaneWidth = patch.Layout.InspectorPaneWidth ?? baseLayout.InspectorPaneWidth,
+                    InspectorCollapsed = patch.Layout.InspectorCollapsed ?? baseLayout.InspectorCollapsed,
                     WorkbenchHeight = patch.Layout.WorkbenchHeight ?? baseLayout.WorkbenchHeight,
                     WorkbenchCollapsed = patch.Layout.WorkbenchCollapsed ?? baseLayout.WorkbenchCollapsed,
                 };

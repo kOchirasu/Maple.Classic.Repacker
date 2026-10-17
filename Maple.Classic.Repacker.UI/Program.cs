@@ -101,9 +101,12 @@ public class Program {
         app.MapGet("/api/export", (HttpContext ctx) => {
             string archiveId = ctx.Request.Query["archiveId"].ToString();
             string path = ctx.Request.Query["path"].ToString();
-            string format = ctx.Request.Query["format"].ToString();
+            string formatRaw = ctx.Request.Query["format"].ToString();
+            RepackerExportFormat parsedFormat = Enum.TryParse<RepackerExportFormat>(formatRaw, ignoreCase: true, out RepackerExportFormat f)
+                ? f
+                : RepackerExportFormat.Auto;
             (bool ok, string? error, string fileName, string mimeType, byte[] data) =
-                workspace.ExportNode(archiveId, path, string.IsNullOrWhiteSpace(format) ? "auto" : format);
+                workspace.ExportNode(archiveId, path, parsedFormat);
             if (!ok) {
                 return Results.BadRequest(new { ok = false, error });
             }
@@ -266,6 +269,24 @@ public class Program {
                         FilePaths: filePaths));
 #else
                     return (false, new RpcOperationResponse(false, "Native file dialog is not supported on this platform."));
+#endif
+                }
+
+                case "workspace.browseSaveFile": {
+#if WINDOWS
+                    BrowseSaveFileRequest req = RpcSerializer.DecodeParams<BrowseSaveFileRequest>(rawParams);
+                    string? initialDir = !string.IsNullOrWhiteSpace(req.InitialDirectory)
+                        ? req.InitialDirectory
+                        : settingsStore.GetRecentPaths().FirstOrDefault();
+                    string? savedPath = WindowsDesktopShell.PickSaveWzFile(req.DefaultFileName, initialDir);
+                    if (string.IsNullOrWhiteSpace(savedPath)) {
+                        return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
+                    }
+                    return (true, new RpcOperationResponse(
+                        Ok: true,
+                        Path: savedPath));
+#else
+                    return (false, new RpcOperationResponse(false, "Native save dialog is not supported on this platform."));
 #endif
                 }
 
@@ -521,6 +542,19 @@ public class Program {
                         Status: BuildStatusPayload(workspace, settingsStore)));
                 }
 
+                case "node.restore": {
+                    NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+                    string archiveId = req.ArchiveId ?? workspace.SelectedArchiveId ?? string.Empty;
+                    string path = req.Path ?? workspace.SelectedNodePath;
+                    (bool ok, string? err, string restoredPath) = workspace.RestoreNode(archiveId, path);
+                    return (ok, new RpcOperationResponse(
+                        Ok: ok,
+                        Error: err,
+                        ArchiveId: archiveId,
+                        Path: restoredPath,
+                        Status: BuildStatusPayload(workspace, settingsStore)));
+                }
+
                 case "node.duplicate": {
                     NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
                     string archiveId = req.ArchiveId ?? workspace.SelectedArchiveId ?? string.Empty;
@@ -681,7 +715,7 @@ public class Program {
                         archiveId,
                         path,
                         req.OutputDirectory ?? string.Empty,
-                        req.Mode ?? "png");
+                        req.Mode);
                     return (ok, new RpcOperationResponse(
                         Ok: ok,
                         Error: err,

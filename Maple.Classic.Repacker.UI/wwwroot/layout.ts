@@ -14,6 +14,7 @@ namespace MapleRepacker {
 
         private treeWidth = 310;
         private inspectorWidth = 380;
+        private inspectorCollapsed = false;
         private workbenchHeight = 250;
         private workbenchCollapsed = false;
 
@@ -38,6 +39,9 @@ namespace MapleRepacker {
             if (typeof saved.inspectorPaneWidth === 'number' && saved.inspectorPaneWidth >= 260 && saved.inspectorPaneWidth <= 720) {
                 this.inspectorWidth = saved.inspectorPaneWidth;
             }
+            if (typeof saved.inspectorCollapsed === 'boolean') {
+                this.inspectorCollapsed = saved.inspectorCollapsed;
+            }
             if (typeof saved.workbenchHeight === 'number' && saved.workbenchHeight >= 110 && saved.workbenchHeight <= 600) {
                 this.workbenchHeight = saved.workbenchHeight;
             }
@@ -45,6 +49,17 @@ namespace MapleRepacker {
                 this.workbenchCollapsed = saved.workbenchCollapsed;
             }
             this.applySizes();
+        }
+
+        public toggleInspector(forceCollapsed?: boolean): boolean {
+            this.inspectorCollapsed = typeof forceCollapsed === 'boolean' ? forceCollapsed : !this.inspectorCollapsed;
+            this.applySizes();
+            this.emitLayoutChange();
+            return this.inspectorCollapsed;
+        }
+
+        public isInspectorCollapsed(): boolean {
+            return this.inspectorCollapsed;
         }
 
         public toggleWorkbench(forceCollapsed?: boolean): boolean {
@@ -61,6 +76,7 @@ namespace MapleRepacker {
         public resetLayout(): void {
             this.treeWidth = 310;
             this.inspectorWidth = 380;
+            this.inspectorCollapsed = false;
             this.workbenchHeight = 250;
             this.workbenchCollapsed = false;
             this.applySizes();
@@ -69,13 +85,35 @@ namespace MapleRepacker {
 
         private applySizes(): void {
             this.treePane.style.width = `${Math.round(this.treeWidth)}px`;
-            this.inspectorPane.style.width = `${Math.round(this.inspectorWidth)}px`;
+            if (this.inspectorCollapsed) {
+                this.inspectorPane.classList.add('collapsed');
+                this.inspectorPane.style.width = '32px';
+            } else {
+                this.inspectorPane.classList.remove('collapsed');
+                this.inspectorPane.style.width = `${Math.round(this.inspectorWidth)}px`;
+            }
             if (this.workbenchCollapsed) {
                 this.workbenchPane.classList.add('collapsed');
                 this.workbenchPane.style.height = '32px';
             } else {
                 this.workbenchPane.classList.remove('collapsed');
                 this.workbenchPane.style.height = `${Math.round(this.workbenchHeight)}px`;
+            }
+
+            const inspectorToggleBtn = document.getElementById('btnToggleInspectorCollapse');
+            if (inspectorToggleBtn) {
+                inspectorToggleBtn.innerHTML = this.inspectorCollapsed ? '&#9666;' : '&#9656;';
+                inspectorToggleBtn.title = this.inspectorCollapsed
+                    ? 'Expand Property Inspector'
+                    : 'Minimize Property Inspector';
+            }
+
+            const toggleBtn = document.getElementById('btnToggleWorkbenchCollapse');
+            if (toggleBtn) {
+                toggleBtn.innerHTML = this.workbenchCollapsed ? '&#9652;' : '&#9662;';
+                toggleBtn.title = this.workbenchCollapsed
+                    ? 'Expand bottom workbench'
+                    : 'Minimize bottom workbench';
             }
         }
 
@@ -84,6 +122,7 @@ namespace MapleRepacker {
                 this.onLayoutChanged({
                     treePaneWidth: Math.round(this.treeWidth),
                     inspectorPaneWidth: Math.round(this.inspectorWidth),
+                    inspectorCollapsed: this.inspectorCollapsed,
                     workbenchHeight: Math.round(this.workbenchHeight),
                     workbenchCollapsed: this.workbenchCollapsed,
                 });
@@ -120,6 +159,9 @@ namespace MapleRepacker {
             // Right vertical splitter (Inspector pane width)
             this.rightSplitter.addEventListener('mousedown', (ev: MouseEvent) => {
                 ev.preventDefault();
+                if (this.inspectorCollapsed) {
+                    this.inspectorCollapsed = false;
+                }
                 const startX = ev.clientX;
                 const startW = this.inspectorWidth;
                 this.rightSplitter.classList.add('dragging');

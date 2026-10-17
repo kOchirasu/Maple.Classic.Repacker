@@ -61,18 +61,21 @@ public static class WzCanvasCodec {
 
     public static byte[] DecodeToRgba(WzValue.Canvas canvas) {
         ArgumentNullException.ThrowIfNull(canvas);
-        return DecodeToRgba(canvas.Width, canvas.Height, canvas.Format, canvas.Payload.Span);
+        return DecodeToRgba(canvas.Width, canvas.Height, (WzCanvasFormat) canvas.Format, canvas.Payload.Span);
     }
 
     public static byte[] DecodeToPng(WzValue.Canvas canvas) {
         ArgumentNullException.ThrowIfNull(canvas);
         int w = Math.Max(1, canvas.Width);
         int h = Math.Max(1, canvas.Height);
-        byte[] rgba = DecodeToRgba(w, h, canvas.Format, canvas.Payload.Span);
+        byte[] rgba = DecodeToRgba(w, h, (WzCanvasFormat) canvas.Format, canvas.Payload.Span);
         return PngCodec.EncodeRgba(w, h, rgba);
     }
 
-    public static byte[] DecodeToRgba(int width, int height, int format, ReadOnlySpan<byte> payload) {
+    public static byte[] DecodeToRgba(int width, int height, int format, ReadOnlySpan<byte> payload) =>
+        DecodeToRgba(width, height, (WzCanvasFormat) format, payload);
+
+    public static byte[] DecodeToRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> payload) {
         if (width <= 0 || height <= 0) {
             return [];
         }
@@ -82,27 +85,27 @@ public static class WzCanvasCodec {
         byte[] rgba = new byte[width * height * 4];
 
         switch (format) {
-            case 1: // BGRA4444 (2 bytes/pixel)
+            case WzCanvasFormat.Bgra4444: // 2 bytes/pixel
                 DecodeBgra4444(raw, rgba, width * height);
                 break;
 
-            case 2: // BGRA8888 (4 bytes/pixel)
+            case WzCanvasFormat.Bgra8888: // 4 bytes/pixel
                 DecodeBgra8888(raw, rgba, width * height);
                 break;
 
-            case 513: // BGR565 (2 bytes/pixel)
+            case WzCanvasFormat.Bgr565: // 2 bytes/pixel
                 DecodeBgr565(raw, rgba, width * height);
                 break;
 
-            case 517: // 16x16 Block BGR565
+            case WzCanvasFormat.Bgr565Block16: // 16x16 Block BGR565
                 DecodeFormat517(raw, rgba, width, height);
                 break;
 
-            case 1026: // DXT3 (BC2)
+            case WzCanvasFormat.Dxt3: // DXT3 (BC2)
                 DecodeDxt3(raw, rgba, width, height);
                 break;
 
-            case 2050: // DXT5 (BC3)
+            case WzCanvasFormat.Dxt5: // DXT5 (BC3)
                 DecodeDxt5(raw, rgba, width, height);
                 break;
 
@@ -114,7 +117,10 @@ public static class WzCanvasCodec {
         return rgba;
     }
 
-    public static byte[] EncodeFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) {
+    public static byte[] EncodeFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) =>
+        EncodeFromRgba(width, height, (WzCanvasFormat) format, rgba);
+
+    public static byte[] EncodeFromRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> rgba) {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(width, 0);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(height, 0);
         int expectedRgba = width * height * 4;
@@ -128,16 +134,19 @@ public static class WzCanvasCodec {
 
     public static (int Width, int Height, byte[] CompressedPayload) EncodePngToCanvasPayload(
         ReadOnlySpan<byte> pngBytes,
-        int format = (int) WzCanvasFormat.Bgra8888) {
+        WzCanvasFormat format = WzCanvasFormat.Bgra8888) {
         (int width, int height, byte[] rgba) = PngCodec.DecodeRgba(pngBytes);
         byte[] compressed = EncodeFromRgba(width, height, format, rgba);
         return (width, height, compressed);
     }
 
-    public static byte[] EncodeRawPixelsFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) {
+    public static byte[] EncodeRawPixelsFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) =>
+        EncodeRawPixelsFromRgba(width, height, (WzCanvasFormat) format, rgba);
+
+    public static byte[] EncodeRawPixelsFromRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> rgba) {
         int pixelCount = width * height;
         switch (format) {
-            case 1: { // BGRA4444
+            case WzCanvasFormat.Bgra4444: {
                 byte[] dst = new byte[pixelCount * 2];
                 for (int i = 0; i < pixelCount; i++) {
                     int s = i * 4;
@@ -152,7 +161,7 @@ public static class WzCanvasCodec {
                 return dst;
             }
 
-            case 2: { // BGRA8888
+            case WzCanvasFormat.Bgra8888: {
                 byte[] dst = new byte[pixelCount * 4];
                 for (int i = 0; i < pixelCount; i++) {
                     int o = i * 4;
@@ -164,7 +173,7 @@ public static class WzCanvasCodec {
                 return dst;
             }
 
-            case 513: { // BGR565
+            case WzCanvasFormat.Bgr565: {
                 byte[] dst = new byte[pixelCount * 2];
                 for (int i = 0; i < pixelCount; i++) {
                     int s = i * 4;
@@ -177,7 +186,7 @@ public static class WzCanvasCodec {
                 return dst;
             }
 
-            case 517: { // 16x16 Block BGR565
+            case WzCanvasFormat.Bgr565Block16: {
                 int blocksX = Math.Max(1, width >> 4);
                 int blocksY = Math.Max(1, height >> 4);
                 byte[] dst = new byte[blocksX * blocksY * 2];
@@ -198,14 +207,14 @@ public static class WzCanvasCodec {
                 return dst;
             }
 
-            case 1026: // DXT3
+            case WzCanvasFormat.Dxt3:
                 return EncodeDxt3(rgba, width, height);
 
-            case 2050: // DXT5
+            case WzCanvasFormat.Dxt5:
                 return EncodeDxt5(rgba, width, height);
 
             default:
-                goto case 2;
+                goto case WzCanvasFormat.Bgra8888;
         }
     }
 

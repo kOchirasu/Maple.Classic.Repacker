@@ -1,3 +1,5 @@
+using Maple.Classic.Repacker.Engine.Canvas;
+
 namespace Maple.Classic.Repacker.Engine.Models;
 
 public enum RepackerNodeKind {
@@ -25,6 +27,44 @@ public enum RepackerPropertyKind {
     RawData,
 }
 
+public enum RepackerChangeState {
+    Unchanged,
+    Added,
+    Modified,
+    Deleted,
+}
+
+public enum RepackerExportFormat {
+    Auto,
+    Wz,
+    Img,
+    Json,
+    Png,
+    Audio,
+}
+
+public enum RepackerBatchExportMode {
+    Png,
+    Sound,
+    Json,
+    Img,
+    All,
+}
+
+public enum RepackerWorkbenchTab {
+    Json,
+    Search,
+    Hex,
+    Batch,
+    Logs,
+}
+
+public enum RepackerCanvasBackground {
+    Checker,
+    Dark,
+    Light,
+}
+
 public enum RepackerLogLevel {
     Info,
     Success,
@@ -50,8 +90,7 @@ public sealed record ArchiveSummaryDto(
     int DirectoryCount,
     int ImageCount,
     int ModifiedImageCount,
-    bool IsModified,
-    bool IsAdded = false,
+    RepackerChangeState ChangeState = RepackerChangeState.Unchanged,
     string[]? LinkedFilePaths = null);
 
 public sealed record TreeNodeDto(
@@ -64,9 +103,8 @@ public sealed record TreeNodeDto(
     string TypeBadge,
     bool HasChildren,
     int ChildCount,
-    bool IsModified,
-    int SizeBytes = 0,
-    bool IsAdded = false);
+    RepackerChangeState ChangeState = RepackerChangeState.Unchanged,
+    int SizeBytes = 0);
 
 public sealed record SubPropertyRowDto(
     string Name,
@@ -76,14 +114,15 @@ public sealed record SubPropertyRowDto(
     string TypeBadge,
     string DisplayValue,
     int ChildCount,
-    int SizeBytes = 0);
+    int SizeBytes = 0,
+    RepackerChangeState ChangeState = RepackerChangeState.Unchanged);
 
 public sealed record VectorPointDto(int X, int Y);
 
 public sealed record CanvasPreviewDto(
     int Width,
     int Height,
-    int Format,
+    WzCanvasFormat Format,
     string FormatName,
     int CompressedBytes,
     byte[] PngBytes,
@@ -104,7 +143,7 @@ public sealed record AnimationFrameDto(
     string FramePath,
     int Width,
     int Height,
-    int Format,
+    WzCanvasFormat Format,
     int DelayMs,
     VectorPointDto Origin,
     VectorPointDto? Lt,
@@ -144,7 +183,7 @@ public sealed record NodeInspectionDto(
     VectorPointDto? VectorValue,
     int ChildCount,
     int SizeBytes,
-    bool IsModified,
+    RepackerChangeState ChangeState,
     bool CanUndo,
     bool CanRedo,
     string JsonPreview,
@@ -153,8 +192,7 @@ public sealed record NodeInspectionDto(
     AnimationFrameDto[] AnimationFrames,
     SoundPreviewDto? Sound,
     string? ResolvedUolTargetPath,
-    byte[] RawBinarySlice,
-    bool IsAdded = false);
+    byte[] RawBinarySlice);
 
 public sealed record SearchQueryDto {
     public string? ArchiveId { get; init; }

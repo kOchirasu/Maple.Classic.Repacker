@@ -3,6 +3,12 @@ using Maple.Classic.File.IO;
 
 namespace Maple.Classic.Repacker.Engine.Audio;
 
+public enum WzWaveFormatTag : ushort {
+    Unknown = 0x0000,
+    Pcm = 0x0001,
+    MpegLayer3 = 0x0055,
+}
+
 public sealed record ExtractedSoundData(
     byte[] AudioBytes,
     string MimeType,
@@ -66,8 +72,8 @@ public static class WzSoundCodec {
         }
 
         // 3. Check WAVEFORMATEX inside WZ Sound_DX8 Header
-        if (TryParseWaveFormatEx(header, out ushort formatTag, out ushort ch, out int sr, out int avgBytesPerSec, out ushort blockAlign, out ushort bps)) {
-            if (formatTag == 0x0001 && !payload.IsEmpty) {
+        if (TryParseWaveFormatEx(header, out WzWaveFormatTag formatTag, out ushort ch, out int sr, out int avgBytesPerSec, out ushort blockAlign, out ushort bps)) {
+            if (formatTag == WzWaveFormatTag.Pcm && !payload.IsEmpty) {
                 // Raw PCM samples — wrap in standard 44-byte RIFF WAVE container so HTML5 <audio> plays it directly
                 byte[] wavBytes = WrapPcmInRiffWave(payload, ch, sr, avgBytesPerSec, blockAlign, bps);
                 return new ExtractedSoundData(
@@ -80,7 +86,7 @@ public static class WzSoundCodec {
                     bps,
                     sound.Duration);
             }
-            if (formatTag == 0x0055) {
+            if (formatTag == WzWaveFormatTag.MpegLayer3) {
                 return new ExtractedSoundData(
                     payload.ToArray(),
                     "audio/mpeg",
@@ -114,7 +120,7 @@ public static class WzSoundCodec {
         if (audioBytes.Length >= 44 &&
             audioBytes[..4].SequenceEqual("RIFF"u8) &&
             audioBytes.Slice(8, 4).SequenceEqual("WAVE"u8)) {
-            ushort formatTag = BinaryPrimitives.ReadUInt16LittleEndian(audioBytes.Slice(20, 2));
+            var formatTag = (WzWaveFormatTag) BinaryPrimitives.ReadUInt16LittleEndian(audioBytes.Slice(20, 2));
             ushort channels = BinaryPrimitives.ReadUInt16LittleEndian(audioBytes.Slice(22, 2));
             int sampleRate = BinaryPrimitives.ReadInt32LittleEndian(audioBytes.Slice(24, 4));
             int byteRate = BinaryPrimitives.ReadInt32LittleEndian(audioBytes.Slice(28, 4));
@@ -122,7 +128,7 @@ public static class WzSoundCodec {
             ushort bitsPerSample = BinaryPrimitives.ReadUInt16LittleEndian(audioBytes.Slice(34, 2));
 
             // Find "data" chunk or store full RIFF WAVE with PCM WAVEFORMATEX header
-            byte[] dx8Header = BuildDx8WaveHeader(formatTag == 0 ? (ushort) 1 : formatTag, channels, sampleRate, byteRate, blockAlign, bitsPerSample);
+            byte[] dx8Header = BuildDx8WaveHeader(formatTag == WzWaveFormatTag.Unknown ? WzWaveFormatTag.Pcm : formatTag, channels, sampleRate, byteRate, blockAlign, bitsPerSample);
             int computedDuration = durationMsOverride ?? (byteRate > 0 ? (int) ((long) (audioBytes.Length - 44) * 1000L / byteRate) : 1000);
             return new WzValue.Sound(audioBytes.Length, Math.Max(1, computedDuration), audioBytes.ToArray(), dx8Header);
         }
@@ -173,13 +179,13 @@ public static class WzSoundCodec {
 
     private static bool TryParseWaveFormatEx(
         ReadOnlySpan<byte> header,
-        out ushort formatTag,
+        out WzWaveFormatTag formatTag,
         out ushort channels,
         out int sampleRate,
         out int avgBytesPerSec,
         out ushort blockAlign,
         out ushort bitsPerSample) {
-        formatTag = 0;
+        formatTag = WzWaveFormatTag.Unknown;
         channels = 2;
         sampleRate = 44100;
         avgBytesPerSec = 176400;
@@ -199,7 +205,7 @@ public static class WzSoundCodec {
         }
 
         ReadOnlySpan<byte> wf = header[wfOffset..];
-        formatTag = BinaryPrimitives.ReadUInt16LittleEndian(wf[..2]);
+        formatTag = (WzWaveFormatTag) BinaryPrimitives.ReadUInt16LittleEndian(wf[..2]);
         channels = BinaryPrimitives.ReadUInt16LittleEndian(wf.Slice(2, 2));
         sampleRate = BinaryPrimitives.ReadInt32LittleEndian(wf.Slice(4, 4));
         avgBytesPerSec = BinaryPrimitives.ReadInt32LittleEndian(wf.Slice(8, 4));
@@ -222,7 +228,7 @@ public static class WzSoundCodec {
         "WAVE"u8.CopyTo(s.Slice(8, 4));
         "fmt "u8.CopyTo(s.Slice(12, 4));
         BinaryPrimitives.WriteUInt32LittleEndian(s.Slice(16, 4), 16u);
-        BinaryPrimitives.WriteUInt16LittleEndian(s.Slice(20, 2), 1); // PCM
+        BinaryPrimitives.WriteUInt16LittleEndian(s.Slice(20, 2), (ushort) WzWaveFormatTag.Pcm);
         BinaryPrimitives.WriteUInt16LittleEndian(s.Slice(22, 2), channels);
         BinaryPrimitives.WriteInt32LittleEndian(s.Slice(24, 4), sampleRate);
         BinaryPrimitives.WriteInt32LittleEndian(s.Slice(28, 4), avgBytesPerSec > 0 ? avgBytesPerSec : sampleRate * channels * (bitsPerSample / 8));
@@ -235,7 +241,7 @@ public static class WzSoundCodec {
     }
 
     private static byte[] BuildDx8WaveHeader(
-        ushort formatTag,
+        WzWaveFormatTag formatTag,
         ushort channels,
         int sampleRate,
         int avgBytesPerSec,
@@ -245,7 +251,7 @@ public static class WzSoundCodec {
         StandardDx8GuidHeader.CopyTo(header);
         header[52] = 18;
         Span<byte> wf = header.AsSpan(53, 18);
-        BinaryPrimitives.WriteUInt16LittleEndian(wf[..2], formatTag);
+        BinaryPrimitives.WriteUInt16LittleEndian(wf[..2], (ushort) formatTag);
         BinaryPrimitives.WriteUInt16LittleEndian(wf.Slice(2, 2), channels);
         BinaryPrimitives.WriteInt32LittleEndian(wf.Slice(4, 4), sampleRate);
         BinaryPrimitives.WriteInt32LittleEndian(wf.Slice(8, 4), avgBytesPerSec);
@@ -261,7 +267,7 @@ public static class WzSoundCodec {
         StandardDx8GuidHeader.CopyTo(header);
         header[52] = 30;
         Span<byte> wf = header.AsSpan(53, 30);
-        BinaryPrimitives.WriteUInt16LittleEndian(wf[..2], 0x0055); // WAVE_FORMAT_MPEGLAYER3
+        BinaryPrimitives.WriteUInt16LittleEndian(wf[..2], (ushort) WzWaveFormatTag.MpegLayer3);
         BinaryPrimitives.WriteUInt16LittleEndian(wf.Slice(2, 2), channels);
         BinaryPrimitives.WriteInt32LittleEndian(wf.Slice(4, 4), sampleRate);
         BinaryPrimitives.WriteInt32LittleEndian(wf.Slice(8, 4), avgBytesPerSec);

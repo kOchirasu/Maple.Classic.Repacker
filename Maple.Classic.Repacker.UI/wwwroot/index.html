@@ -70,6 +70,7 @@
                         <button type="button" data-action="toggleVectors">Toggle Vector Bounds (lt/rb/head)</button>
                         <button type="button" data-action="togglePixelGrid">Toggle Pixel Grid</button>
                         <div class="menu-sep"></div>
+                        <button type="button" data-action="toggleInspector">Toggle Property Inspector</button>
                         <button type="button" data-action="toggleWorkbench">Toggle Bottom Workbench</button>
                         <button type="button" data-action="resetLayout">Reset Workspace Layout</button>
                     </div>
@@ -135,9 +136,9 @@
                         <div class="canvas-toolbar">
                             <div class="toolbar-group">
                                 <span class="toolbar-label">BG</span>
-                                <button type="button" class="seg-btn active" data-bg="checker" title="Checkerboard transparency grid">Grid</button>
-                                <button type="button" class="seg-btn" data-bg="dark" title="Dark charcoal background">Dark</button>
-                                <button type="button" class="seg-btn" data-bg="light" title="Light background">Light</button>
+                                <button type="button" class="seg-btn active" data-bg="Checker" title="Checkerboard transparency grid">Grid</button>
+                                <button type="button" class="seg-btn" data-bg="Dark" title="Dark charcoal background">Dark</button>
+                                <button type="button" class="seg-btn" data-bg="Light" title="Light background">Light</button>
                             </div>
 
                             <div class="toolbar-group">
@@ -166,12 +167,12 @@
 
                             <div class="toolbar-group right-aligned">
                                 <select id="canvasFormatSelect" class="select-compact" title="Convert WZ Canvas pixel format">
-                                    <option value="1">Format 1 &bull; BGRA4444</option>
-                                    <option value="2">Format 2 &bull; BGRA8888</option>
-                                    <option value="513">Format 513 &bull; BGR565</option>
-                                    <option value="517">Format 517 &bull; Block16</option>
-                                    <option value="1026">Format 1026 &bull; DXT3</option>
-                                    <option value="2050">Format 2050 &bull; DXT5</option>
+                                    <option value="Bgra4444">Format 1 &bull; BGRA4444</option>
+                                    <option value="Bgra8888">Format 2 &bull; BGRA8888</option>
+                                    <option value="Bgr565">Format 513 &bull; BGR565</option>
+                                    <option value="Bgr565Block16">Format 517 &bull; Block16</option>
+                                    <option value="Dxt3">Format 1026 &bull; DXT3</option>
+                                    <option value="Dxt5">Format 2050 &bull; DXT5</option>
                                 </select>
                                 <button type="button" class="cmd-btn small" id="btnConvertCanvasFormat" title="Re-encode Canvas into selected WZ pixel format">Convert</button>
                                 <button type="button" class="cmd-btn small" id="btnReplacePng" title="Import a .png file to replace this Canvas sprite">Import .png</button>
@@ -197,7 +198,7 @@
                         <!-- Animation Player Strip (shown when node has animation frames) -->
                         <div class="animation-player-bar hidden" id="animPlayerBar">
                             <div class="anim-controls">
-                                <button type="button" class="cmd-btn small primary" id="btnAnimPlayPause">Play</button>
+                                <button type="button" class="cmd-btn small anim-play-btn play" id="btnAnimPlayPause"><span class="anim-btn-icon">&#9654;</span><span>Play</span></button>
                                 <button type="button" class="cmd-btn small" id="btnAnimPrev" title="Previous Frame">&laquo;</button>
                                 <span class="anim-frame-counter" id="animFrameCounter">Frame 0 / 0</span>
                                 <button type="button" class="cmd-btn small" id="btnAnimNext" title="Next Frame">&raquo;</button>
@@ -238,9 +239,11 @@
                                     <button type="button" class="cmd-btn small" id="btnCopyStringStage" title="Copy string value to clipboard">Copy String</button>
                                 </div>
                             </div>
-                            <div class="string-viewer-box" id="stringViewerContent"></div>
+                            <pre class="string-viewer-box" id="stringViewerContent"></pre>
                         </div>
                     </section>
+
+                    <div class="splitter-h hidden" id="childrenTableSplitter" title="Drag to resize Child Nodes"></div>
 
                     <!-- 4. Sub-Properties & Children Table Section -->
                     <section class="children-table-section" id="childrenTableSection">
@@ -248,7 +251,7 @@
                             <span class="section-subtitle" id="childrenTableTitle">Child Nodes</span>
                             <div class="section-subbar-actions">
                                 <span class="section-submeta" id="childrenTableMeta">Click a row to inspect</span>
-                                <button type="button" class="cmd-btn small subbar-toggle-btn" id="btnToggleChildrenTable" title="Minimize child nodes table">&#9662; Minimize</button>
+                                <button type="button" class="icon-btn subbar-toggle-btn" id="btnToggleChildrenTable" title="Minimize child nodes table">&#9662;</button>
                             </div>
                         </div>
                         <div class="table-scroll-wrap">
@@ -280,7 +283,12 @@
                     <div class="pane-actions">
                         <button type="button" class="icon-btn" id="btnRenameNode" title="Rename selected node (F2)">Rename</button>
                         <button type="button" class="icon-btn danger" id="btnDeleteNode" title="Delete selected node (Del)">Delete</button>
+                        <button type="button" class="icon-btn subbar-toggle-btn" id="btnToggleInspectorCollapse" title="Minimize Property Inspector">&#9656;</button>
                     </div>
+                </div>
+
+                <div class="inspector-collapsed-strip" id="inspectorCollapsedStrip" title="Expand Property Inspector">
+                    <span>Property Inspector</span>
                 </div>
 
                 <div class="inspector-scroll" id="inspectorBody">
@@ -354,11 +362,11 @@
         <section class="workbench-pane" id="workbenchPane">
             <div class="workbench-header">
                 <div class="workbench-tabs" id="workbenchTabs">
-                    <button type="button" class="wb-tab active" data-tab="json">JSON Subtree Editor</button>
-                    <button type="button" class="wb-tab" data-tab="search">Global WZ Search <span class="tab-pill" id="searchCountPill">0</span></button>
-                    <button type="button" class="wb-tab" data-tab="hex">Hex &amp; Binary Inspector</button>
-                    <button type="button" class="wb-tab" data-tab="batch">Batch Export &amp; Repack</button>
-                    <button type="button" class="wb-tab" data-tab="logs">Console Logs <span class="tab-pill" id="logCountPill">0</span></button>
+                    <button type="button" class="wb-tab active" data-tab="Json">JSON Subtree Editor</button>
+                    <button type="button" class="wb-tab" data-tab="Search">Global WZ Search <span class="tab-pill" id="searchCountPill">0</span></button>
+                    <button type="button" class="wb-tab" data-tab="Hex">Hex &amp; Binary Inspector</button>
+                    <button type="button" class="wb-tab" data-tab="Batch">Batch Export &amp; Repack</button>
+                    <button type="button" class="wb-tab" data-tab="Logs">Console Logs <span class="tab-pill" id="logCountPill">0</span></button>
                 </div>
 
                 <div class="workbench-actions">
@@ -367,7 +375,7 @@
                         <button type="button" class="cmd-btn small" id="btnFormatJson">Format</button>
                         <button type="button" class="cmd-btn small" id="btnResetJson">Revert</button>
                     </div>
-                    <button type="button" class="icon-btn" id="btnToggleWorkbenchCollapse" title="Collapse or expand workbench">&#9662;</button>
+                    <button type="button" class="icon-btn subbar-toggle-btn" id="btnToggleWorkbenchCollapse" title="Minimize bottom workbench">&#9662;</button>
                 </div>
             </div>
 
@@ -430,11 +438,11 @@
                             <div class="batch-form-row">
                                 <input type="text" id="batchOutputDirInput" class="input-full" placeholder="/path/to/export/folder" />
                                 <select id="batchExportModeSelect" class="select-compact">
-                                    <option value="png">PNG Sprites (.png)</option>
-                                    <option value="sound">Sound_DX8 Audio (.wav / .mp3)</option>
-                                    <option value="json">JSON Property Trees (.json)</option>
-                                    <option value="img">Raw WZ Images (.img)</option>
-                                    <option value="all">All Sprites + Audio</option>
+                                    <option value="Png">PNG Sprites (.png)</option>
+                                    <option value="Sound">Sound_DX8 Audio (.wav / .mp3)</option>
+                                    <option value="Json">JSON Property Trees (.json)</option>
+                                    <option value="Img">Raw WZ Images (.img)</option>
+                                    <option value="All">All Sprites + Audio</option>
                                 </select>
                                 <button type="button" class="cmd-btn primary" id="btnRunBatchExport">Run Bulk Export</button>
                             </div>
@@ -485,6 +493,7 @@
         <button type="button" data-ctx="inlineLinks">Inline _outlink / _inlink Sprites</button>
         <button type="button" data-ctx="exportAuto" id="ctxExportBtn">Export Node...</button>
         <div class="menu-sep"></div>
+        <button type="button" data-ctx="restore" id="ctxRestoreBtn" class="restore-item hidden">Restore Node</button>
         <button type="button" data-ctx="delete" id="ctxDeleteBtn" class="danger-item">Delete Node <kbd>Del</kbd></button>
         <button type="button" data-ctx="closeArchive" id="ctxCloseArchiveBtn" class="danger-item hidden">Close Archive <kbd>Del</kbd></button>
     </div>

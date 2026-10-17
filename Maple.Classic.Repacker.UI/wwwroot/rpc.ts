@@ -29,11 +29,119 @@ namespace MapleRepacker {
         RawData = 'RawData',
     }
 
+    export enum RepackerChangeState {
+        Unchanged = 'Unchanged',
+        Added = 'Added',
+        Modified = 'Modified',
+        Deleted = 'Deleted',
+    }
+
+    export enum WzCanvasFormat {
+        Unknown = 'Unknown',
+        Bgra4444 = 'Bgra4444',
+        Bgra8888 = 'Bgra8888',
+        Bgr565 = 'Bgr565',
+        Bgr565Block16 = 'Bgr565Block16',
+        Dxt3 = 'Dxt3',
+        Dxt5 = 'Dxt5',
+    }
+
+    export enum RepackerExportFormat {
+        Auto = 'Auto',
+        Wz = 'Wz',
+        Img = 'Img',
+        Json = 'Json',
+        Png = 'Png',
+        Audio = 'Audio',
+    }
+
+    export enum RepackerBatchExportMode {
+        Png = 'Png',
+        Sound = 'Sound',
+        Json = 'Json',
+        Img = 'Img',
+        All = 'All',
+    }
+
+    export enum RepackerWorkbenchTab {
+        Json = 'Json',
+        Search = 'Search',
+        Hex = 'Hex',
+        Batch = 'Batch',
+        Logs = 'Logs',
+    }
+
+    export enum RepackerCanvasBackground {
+        Checker = 'Checker',
+        Dark = 'Dark',
+        Light = 'Light',
+    }
+
     export enum RepackerLogLevel {
         Info = 'Info',
         Success = 'Success',
         Warning = 'Warning',
         Error = 'Error',
+    }
+
+    export enum ToastKind {
+        Info = 'info',
+        Success = 'success',
+        Error = 'error',
+    }
+
+    export enum TreeContextMenuCommand {
+        Inspect = 'inspect',
+        AddProp = 'addProp',
+        AddImg = 'addImg',
+        AddDir = 'addDir',
+        Copy = 'copy',
+        Paste = 'paste',
+        Duplicate = 'duplicate',
+        Rename = 'rename',
+        InlineLinks = 'inlineLinks',
+        ExportAuto = 'exportAuto',
+        Restore = 'restore',
+        Delete = 'delete',
+        CloseArchive = 'closeArchive',
+    }
+
+    export enum MenuBarAction {
+        OpenFileModal = 'openFileModal',
+        OpenDirModal = 'openDirModal',
+        NewArchiveModal = 'newArchiveModal',
+        SaveArchiveDisk = 'saveArchiveDisk',
+        DownloadArchive = 'downloadArchive',
+        CloseActiveArchive = 'closeActiveArchive',
+        UndoNode = 'undoNode',
+        RedoNode = 'redoNode',
+        AddPropertyModal = 'addPropertyModal',
+        AddImageModal = 'addImageModal',
+        AddDirectoryModal = 'addDirectoryModal',
+        CopyNode = 'copyNode',
+        PasteNode = 'pasteNode',
+        DuplicateNode = 'duplicateNode',
+        RenameNodePrompt = 'renameNodePrompt',
+        DeleteNode = 'deleteNode',
+        FocusGlobalSearch = 'focusGlobalSearch',
+        InlineOutlinksNode = 'inlineOutlinksNode',
+        OpenBatchExportTab = 'openBatchExportTab',
+        ExportSelectedJson = 'exportSelectedJson',
+        ExportSelectedImg = 'exportSelectedImg',
+        ToggleCrosshair = 'toggleCrosshair',
+        ToggleVectors = 'toggleVectors',
+        TogglePixelGrid = 'togglePixelGrid',
+        ToggleInspector = 'toggleInspector',
+        ToggleWorkbench = 'toggleWorkbench',
+        ResetLayout = 'resetLayout',
+    }
+
+    export enum HostWebMessageType {
+        OpenTreeContextMenu = 'openTreeContextMenu',
+        CloseTreeContextMenu = 'closeTreeContextMenu',
+        TreeContextMenuCommand = 'treeContextMenuCommand',
+        RequestAppClose = 'requestAppClose',
+        ConfirmAppClose = 'confirmAppClose',
     }
 
     export interface RepackerLogEntry {
@@ -55,8 +163,7 @@ namespace MapleRepacker {
         directoryCount: number;
         imageCount: number;
         modifiedImageCount: number;
-        isModified: boolean;
-        isAdded?: boolean;
+        changeState: RepackerChangeState;
         linkedFilePaths?: string[];
     }
 
@@ -70,9 +177,8 @@ namespace MapleRepacker {
         typeBadge: string;
         hasChildren: boolean;
         childCount: number;
-        isModified: boolean;
         sizeBytes: number;
-        isAdded?: boolean;
+        changeState: RepackerChangeState;
     }
 
     export interface SubPropertyRowDto {
@@ -84,6 +190,7 @@ namespace MapleRepacker {
         displayValue: string;
         childCount: number;
         sizeBytes: number;
+        changeState: RepackerChangeState;
     }
 
     export interface VectorPointDto {
@@ -94,7 +201,7 @@ namespace MapleRepacker {
     export interface CanvasPreviewDto {
         width: number;
         height: number;
-        format: number;
+        format: WzCanvasFormat;
         formatName: string;
         compressedBytes: number;
         pngBytes: Uint8Array | number[];
@@ -116,7 +223,7 @@ namespace MapleRepacker {
         framePath: string;
         width: number;
         height: number;
-        format: number;
+        format: WzCanvasFormat;
         delayMs: number;
         origin: VectorPointDto;
         lt?: VectorPointDto | null;
@@ -158,7 +265,7 @@ namespace MapleRepacker {
         vectorValue?: VectorPointDto | null;
         childCount: number;
         sizeBytes: number;
-        isModified: boolean;
+        changeState: RepackerChangeState;
         canUndo: boolean;
         canRedo: boolean;
         jsonPreview: string;
@@ -168,7 +275,6 @@ namespace MapleRepacker {
         sound?: SoundPreviewDto | null;
         resolvedUolTargetPath?: string | null;
         rawBinarySlice: Uint8Array | number[];
-        isAdded?: boolean;
     }
 
     export interface SearchResultItemDto {
@@ -194,14 +300,15 @@ namespace MapleRepacker {
     export interface SavedRepackerLayoutDto {
         treePaneWidth?: number | null;
         inspectorPaneWidth?: number | null;
+        inspectorCollapsed?: boolean | null;
         workbenchHeight?: number | null;
         workbenchCollapsed?: boolean | null;
     }
 
     export interface SavedRepackerUiStateDto {
         layout?: SavedRepackerLayoutDto | null;
-        activeWorkbenchTab?: string | null;
-        canvasBackground?: string | null;
+        activeWorkbenchTab?: RepackerWorkbenchTab | null;
+        canvasBackground?: RepackerCanvasBackground | null;
         showOriginCrosshair?: boolean | null;
         showVectorBounds?: boolean | null;
         showPixelGrid?: boolean | null;

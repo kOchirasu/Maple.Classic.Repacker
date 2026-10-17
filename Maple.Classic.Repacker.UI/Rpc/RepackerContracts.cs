@@ -1,3 +1,4 @@
+using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
 
 namespace Maple.Classic.Repacker.UI.Rpc;
@@ -74,6 +75,11 @@ public sealed class SaveArchiveRequest {
     public ushort? Version { get; set; }
 }
 
+public sealed class BrowseSaveFileRequest {
+    public string? DefaultFileName { get; set; }
+    public string? InitialDirectory { get; set; }
+}
+
 public sealed class CloseArchiveRequest {
     public string? ArchiveId { get; set; }
 }
@@ -101,7 +107,7 @@ public sealed class AddPropertyRequest {
     public int? VecX { get; set; }
     public int? VecY { get; set; }
     public byte[]? BinaryPayload { get; set; }
-    public int? CanvasFormat { get; set; }
+    public WzCanvasFormat? CanvasFormat { get; set; }
 }
 
 public sealed class AddImageRequest {
@@ -134,7 +140,7 @@ public sealed class ReplaceCanvasRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }
     public byte[]? PngBytes { get; set; }
-    public int? Format { get; set; }
+    public WzCanvasFormat? Format { get; set; }
     public int? OriginX { get; set; }
     public int? OriginY { get; set; }
     public int? DelayMs { get; set; }
@@ -143,7 +149,7 @@ public sealed class ReplaceCanvasRequest {
 public sealed class ChangeCanvasFormatRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }
-    public int Format { get; set; } = 2;
+    public WzCanvasFormat Format { get; set; } = WzCanvasFormat.Bgra8888;
 }
 
 public sealed class ReplaceSoundRequest {
@@ -176,12 +182,12 @@ public sealed class SaveUiStateRequest {
 public sealed class ExportNodeRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }
-    public string? Format { get; set; }
+    public RepackerExportFormat Format { get; set; } = RepackerExportFormat.Auto;
 }
 
 public sealed class BatchExportRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }
     public string? OutputDirectory { get; set; }
-    public string? Mode { get; set; }
+    public RepackerBatchExportMode Mode { get; set; } = RepackerBatchExportMode.Png;
 }

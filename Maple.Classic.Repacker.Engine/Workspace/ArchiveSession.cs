@@ -11,11 +11,19 @@ public sealed class VirtualFsNode(string name, WzNodeKind kind, WzNode? backingN
     public string? DiskDirectoryPath { get; set; }
     public bool IsDiskLinked { get; set; }
     public bool IsUserAdded { get; set; }
+    public bool IsDeleted { get; set; }
     public bool HasChildStructureChanges { get; set; }
 
     public bool IsDir => Kind == WzNodeKind.Directory;
     public bool IsImage => Kind == WzNodeKind.Image;
 }
+
+public sealed record DeletedPropertyEntry(
+    string SubPath,
+    string ParentSubPath,
+    string Name,
+    int OriginalIndex,
+    WzValue Value);
 
 /// <summary>
 /// Represents an open WZ archive in the Repacker workspace with lazy-loaded mutable <see cref="WzValue"/> trees,
@@ -24,11 +32,16 @@ public sealed class VirtualFsNode(string name, WzNodeKind kind, WzNode? backingN
 public sealed class ArchiveSession : IDisposable {
     private const int MaxUndoDepth = 32;
 
+    private sealed record ImageUndoSnapshot(
+        byte[] ImageBytes,
+        Dictionary<string, DeletedPropertyEntry> DeletedProperties);
+
     private readonly Dictionary<string, WzValue> loadedImages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, WzValue> baselineImages = new(StringComparer.Ordinal);
     private readonly HashSet<string> modifiedImages = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<byte[]>> undoStacks = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Stack<byte[]>> redoStacks = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, DeletedPropertyEntry>> deletedPropertiesByImage = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Stack<ImageUndoSnapshot>> undoStacks = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Stack<ImageUndoSnapshot>> redoStacks = new(StringComparer.Ordinal);
     private readonly List<WzArchive> linkedArchives = [];
     private readonly HashSet<string> openedArchivePaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly ushort? explicitVersion;
@@ -423,6 +436,12 @@ public sealed class ArchiveSession : IDisposable {
             fileSize = (long) Archive.Header.FSize + Archive.Header.FStart;
         }
 
+        RepackerChangeState archiveChangeState = IsUserCreatedArchive
+            ? RepackerChangeState.Added
+            : IsModified
+                ? RepackerChangeState.Modified
+                : RepackerChangeState.Unchanged;
+
         return new ArchiveSummaryDto(
             ArchiveId,
             Name,
@@ -435,8 +454,7 @@ public sealed class ArchiveSession : IDisposable {
             dirs,
             imgs,
             modifiedImages.Count,
-            !IsUserCreatedArchive && IsModified,
-            IsUserCreatedArchive,
+            archiveChangeState,
             GetLinkedFilePaths());
     }
 
@@ -444,6 +462,9 @@ public sealed class ArchiveSession : IDisposable {
         int dirs = 0;
         int imgs = 0;
         foreach (VirtualFsNode c in root.Children) {
+            if (c.IsDeleted) {
+                continue;
+            }
             if (c.IsDir) {
                 dirs++;
                 (int d, int i) = CountVirtualRecursive(c);
@@ -454,6 +475,47 @@ public sealed class ArchiveSession : IDisposable {
             }
         }
         return (dirs, imgs);
+    }
+
+    public bool IsVirtualPathDeleted(ReadOnlySpan<char> path) {
+        path = path.Trim('/');
+        if (path.IsEmpty) {
+            return false;
+        }
+
+        VirtualFsNode cur = VirtualRoot;
+        foreach (Range range in path.Split('/')) {
+            ReadOnlySpan<char> part = path[range];
+            if (part.IsEmpty) {
+                continue;
+            }
+            if (cur.IsDir) {
+                EnsureDirectoryLinked(cur);
+            }
+            VirtualFsNode? next = null;
+            foreach (VirtualFsNode child in cur.Children) {
+                if (child.Name.AsSpan().SequenceEqual(part)) {
+                    next = child;
+                    break;
+                }
+            }
+            if (next is null) {
+                foreach (VirtualFsNode child in cur.Children) {
+                    if (child.Name.AsSpan().Equals(part, StringComparison.OrdinalIgnoreCase)) {
+                        next = child;
+                        break;
+                    }
+                }
+            }
+            if (next is null) {
+                return false;
+            }
+            if (next.IsDeleted) {
+                return true;
+            }
+            cur = next;
+        }
+        return cur.IsDeleted;
     }
 
     public VirtualFsNode? ResolveVirtualNode(ReadOnlySpan<char> path) {
@@ -511,12 +573,29 @@ public sealed class ArchiveSession : IDisposable {
     public bool TryGetBaselineImage(string imagePath, out WzValue? baseline) =>
         baselineImages.TryGetValue(NormalizePath(imagePath), out baseline);
 
-    public (bool IsModified, bool IsAdded) GetDirectoryChangeState(string dirPath, VirtualFsNode dirNode) {
-        if (IsUserCreatedArchive || dirNode.IsUserAdded) {
-            return (false, true);
+    public RepackerChangeState GetDirectoryChangeState(string dirPath, VirtualFsNode dirNode) {
+        if (dirNode.IsDeleted || IsVirtualPathDeleted(dirPath)) {
+            return RepackerChangeState.Deleted;
         }
-        bool modified = IsDirectorySubtreeDirty(NormalizePath(dirPath), dirNode);
-        return (modified, false);
+        if (IsUserCreatedArchive || dirNode.IsUserAdded) {
+            return RepackerChangeState.Added;
+        }
+        return IsDirectorySubtreeDirty(NormalizePath(dirPath), dirNode)
+            ? RepackerChangeState.Modified
+            : RepackerChangeState.Unchanged;
+    }
+
+    public RepackerChangeState GetImageChangeState(string imagePath, bool parentDeleted = false) {
+        string norm = NormalizePath(imagePath);
+        if (parentDeleted || IsVirtualPathDeleted(norm)) {
+            return RepackerChangeState.Deleted;
+        }
+        if (IsImageAdded(norm)) {
+            return RepackerChangeState.Added;
+        }
+        return IsImageModified(norm)
+            ? RepackerChangeState.Modified
+            : RepackerChangeState.Unchanged;
     }
 
     private bool IsDirectorySubtreeDirty(string normDirPath, VirtualFsNode dirNode) {
@@ -530,7 +609,7 @@ public sealed class ArchiveSession : IDisposable {
             }
         }
         foreach (VirtualFsNode child in dirNode.Children) {
-            if (child.IsUserAdded) {
+            if (child.IsUserAdded || child.IsDeleted) {
                 return true;
             }
             if (child.IsDir) {
@@ -550,13 +629,13 @@ public sealed class ArchiveSession : IDisposable {
         }
         (string? imgPath, _) = SplitImageAndSubPath(norm);
         if (imgPath is not null) {
-            return !IsImageAdded(imgPath) && modifiedImages.Contains(imgPath);
+            return GetImageChangeState(imgPath) == RepackerChangeState.Modified;
         }
         VirtualFsNode? dirNode = ResolveVirtualNode(norm);
         if (dirNode is null) {
             return false;
         }
-        return GetDirectoryChangeState(norm, dirNode).IsModified;
+        return GetDirectoryChangeState(norm, dirNode) == RepackerChangeState.Modified;
     }
 
     public WzValue GetOrParseImage(string imagePath) {
@@ -614,18 +693,25 @@ public sealed class ArchiveSession : IDisposable {
         }
     }
 
+    private Dictionary<string, DeletedPropertyEntry> CloneDeletedMap(string normImagePath) {
+        if (!deletedPropertiesByImage.TryGetValue(normImagePath, out Dictionary<string, DeletedPropertyEntry>? map) || map.Count == 0) {
+            return new Dictionary<string, DeletedPropertyEntry>(StringComparer.Ordinal);
+        }
+        return new Dictionary<string, DeletedPropertyEntry>(map, StringComparer.Ordinal);
+    }
+
     public void RecordUndoSnapshot(string imagePath) {
         string norm = NormalizePath(imagePath);
         EnsureBaselineRecorded(norm);
         WzValue current = GetOrParseImage(norm);
-        byte[] snapshot = current.ToBytes();
+        var snapshot = new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm));
 
-        if (!undoStacks.TryGetValue(norm, out Stack<byte[]>? stack)) {
-            stack = new Stack<byte[]>();
+        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? stack)) {
+            stack = new Stack<ImageUndoSnapshot>();
             undoStacks[norm] = stack;
         }
         if (stack.Count >= MaxUndoDepth) {
-            byte[][] items = stack.ToArray();
+            ImageUndoSnapshot[] items = stack.ToArray();
             stack.Clear();
             for (int i = Math.Min(items.Length - 1, MaxUndoDepth - 2); i >= 0; i--) {
                 stack.Push(items[i]);
@@ -633,7 +719,7 @@ public sealed class ArchiveSession : IDisposable {
         }
         stack.Push(snapshot);
 
-        if (redoStacks.TryGetValue(norm, out Stack<byte[]>? redo)) {
+        if (redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo)) {
             redo.Clear();
         }
     }
@@ -644,72 +730,227 @@ public sealed class ArchiveSession : IDisposable {
         if (newRoot is not null) {
             loadedImages[norm] = newRoot;
         }
-        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) &&
-            loadedImages.TryGetValue(norm, out WzValue? curImg) &&
+        SyncDeletedProperties(norm);
+        UpdateImageModifiedFlag(norm);
+    }
+
+    private void UpdateImageModifiedFlag(string normImagePath) {
+        bool hasDeletedProps = deletedPropertiesByImage.TryGetValue(normImagePath, out Dictionary<string, DeletedPropertyEntry>? delMap) && delMap.Count > 0;
+        if (!hasDeletedProps &&
+            baselineImages.TryGetValue(normImagePath, out WzValue? baseImg) &&
+            loadedImages.TryGetValue(normImagePath, out WzValue? curImg) &&
             curImg.Equals(baseImg)) {
-            modifiedImages.Remove(norm);
+            modifiedImages.Remove(normImagePath);
         } else {
-            modifiedImages.Add(norm);
+            modifiedImages.Add(normImagePath);
+        }
+    }
+
+    public void RecordDeletedProperty(
+        string imagePath,
+        string subPath,
+        string parentSubPath,
+        string name,
+        int originalIndex,
+        WzValue value) {
+        string normImg = NormalizePath(imagePath);
+        string normSub = NormalizePath(subPath);
+        string normParent = NormalizePath(parentSubPath);
+        if (!deletedPropertiesByImage.TryGetValue(normImg, out Dictionary<string, DeletedPropertyEntry>? map)) {
+            map = new Dictionary<string, DeletedPropertyEntry>(StringComparer.Ordinal);
+            deletedPropertiesByImage[normImg] = map;
+        }
+
+        string nestedPrefix = normSub + "/";
+        foreach (string key in map.Keys.Where(k => k.StartsWith(nestedPrefix, StringComparison.Ordinal)).ToArray()) {
+            map.Remove(key);
+        }
+
+        map[normSub] = new DeletedPropertyEntry(normSub, normParent, name, Math.Max(0, originalIndex), value);
+    }
+
+    public IReadOnlyList<DeletedPropertyEntry> GetDeletedDirectChildProperties(string imagePath, string parentSubPath) {
+        string normImg = NormalizePath(imagePath);
+        string normParent = NormalizePath(parentSubPath);
+        if (!deletedPropertiesByImage.TryGetValue(normImg, out Dictionary<string, DeletedPropertyEntry>? map) || map.Count == 0) {
+            return [];
+        }
+        return map.Values
+            .Where(e => string.Equals(e.ParentSubPath, normParent, StringComparison.Ordinal))
+            .OrderBy(static e => e.OriginalIndex)
+            .ToArray();
+    }
+
+    public (WzValue? Value, bool IsDeleted) ResolvePropertyOrDeleted(string imagePath, WzValue imgRoot, string subPath) {
+        string normImg = NormalizePath(imagePath);
+        string normSub = NormalizePath(subPath);
+        bool imgDeleted = IsVirtualPathDeleted(normImg);
+
+        if (string.IsNullOrEmpty(normSub)) {
+            return (imgRoot, imgDeleted);
+        }
+
+        WzValue? active = RepackerWorkspace.ResolvePropertyNode(imgRoot, normSub);
+        if (active is not null) {
+            return (active, imgDeleted);
+        }
+
+        if (!deletedPropertiesByImage.TryGetValue(normImg, out Dictionary<string, DeletedPropertyEntry>? map) || map.Count == 0) {
+            return (null, false);
+        }
+
+        if (map.TryGetValue(normSub, out DeletedPropertyEntry? directEntry)) {
+            return (directEntry.Value, true);
+        }
+
+        // Check if an ancestor property is deleted and resolve relative to that ancestor
+        string cur = normSub;
+        while (true) {
+            int slash = cur.LastIndexOf('/');
+            if (slash <= 0) {
+                break;
+            }
+            cur = cur[..slash];
+            if (map.TryGetValue(cur, out DeletedPropertyEntry? ancestorEntry)) {
+                string remainder = normSub[(cur.Length + 1)..];
+                WzValue? nested = RepackerWorkspace.ResolvePropertyNode(ancestorEntry.Value, remainder);
+                if (nested is not null) {
+                    return (nested, true);
+                }
+            }
+        }
+
+        return (null, false);
+    }
+
+    public (bool Ok, string? RestoredSubPath) RestoreDeletedProperty(string imagePath, WzValue imgRoot, string subPath) {
+        string normImg = NormalizePath(imagePath);
+        string normSub = NormalizePath(subPath);
+        if (!deletedPropertiesByImage.TryGetValue(normImg, out Dictionary<string, DeletedPropertyEntry>? map) || map.Count == 0) {
+            return (false, null);
+        }
+
+        DeletedPropertyEntry? targetEntry = null;
+        if (!map.TryGetValue(normSub, out targetEntry)) {
+            string cur = normSub;
+            while (true) {
+                int slash = cur.LastIndexOf('/');
+                if (slash <= 0) {
+                    break;
+                }
+                cur = cur[..slash];
+                if (map.TryGetValue(cur, out targetEntry)) {
+                    break;
+                }
+            }
+        }
+
+        if (targetEntry is null) {
+            return (false, null);
+        }
+
+        WzValue? parentVal = string.IsNullOrEmpty(targetEntry.ParentSubPath)
+            ? imgRoot
+            : RepackerWorkspace.ResolvePropertyNode(imgRoot, targetEntry.ParentSubPath);
+        if (parentVal is null) {
+            return (false, null);
+        }
+
+        if (parentVal is WzValue.Convex(var items)) {
+            int insertIdx = Math.Clamp(targetEntry.OriginalIndex, 0, items.Count);
+            items.Insert(insertIdx, targetEntry.Value);
+        } else {
+            List<WzProperty>? props = parentVal switch {
+                WzValue.Object(var p) => p,
+                WzValue.Canvas { Properties: var p } => p,
+                _ => null,
+            };
+            if (props is null) {
+                return (false, null);
+            }
+            if (props.All(p => p.Name != targetEntry.Name)) {
+                int insertIdx = Math.Clamp(targetEntry.OriginalIndex, 0, props.Count);
+                props.Insert(insertIdx, new WzProperty(targetEntry.Name, targetEntry.Value));
+            }
+        }
+
+        map.Remove(targetEntry.SubPath);
+        return (true, targetEntry.SubPath);
+    }
+
+    private void SyncDeletedProperties(string normImagePath) {
+        if (!loadedImages.TryGetValue(normImagePath, out WzValue? curImg)) {
+            return;
+        }
+
+        if (deletedPropertiesByImage.TryGetValue(normImagePath, out Dictionary<string, DeletedPropertyEntry>? existingMap)) {
+            foreach (DeletedPropertyEntry entry in existingMap.Values.ToArray()) {
+                // If the property exists again in curImg or its parent no longer exists in curImg, remove the entry
+                if (RepackerWorkspace.ResolvePropertyNode(curImg, entry.SubPath) is not null) {
+                    existingMap.Remove(entry.SubPath);
+                    continue;
+                }
+                if (!string.IsNullOrEmpty(entry.ParentSubPath) &&
+                    RepackerWorkspace.ResolvePropertyNode(curImg, entry.ParentSubPath) is null) {
+                    existingMap.Remove(entry.SubPath);
+                }
+            }
         }
     }
 
     public bool CanUndo(string? imagePath) {
         if (string.IsNullOrEmpty(imagePath)) return false;
         string norm = NormalizePath(imagePath);
-        return undoStacks.TryGetValue(norm, out Stack<byte[]>? s) && s.Count > 0;
+        return undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? s) && s.Count > 0;
     }
 
     public bool CanRedo(string? imagePath) {
         if (string.IsNullOrEmpty(imagePath)) return false;
         string norm = NormalizePath(imagePath);
-        return redoStacks.TryGetValue(norm, out Stack<byte[]>? s) && s.Count > 0;
+        return redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? s) && s.Count > 0;
     }
 
     public bool Undo(string imagePath) {
         string norm = NormalizePath(imagePath);
-        if (!undoStacks.TryGetValue(norm, out Stack<byte[]>? undo) || undo.Count == 0) {
+        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? undo) || undo.Count == 0) {
             return false;
         }
 
         WzValue current = GetOrParseImage(norm);
-        if (!redoStacks.TryGetValue(norm, out Stack<byte[]>? redo)) {
-            redo = new Stack<byte[]>();
+        if (!redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo)) {
+            redo = new Stack<ImageUndoSnapshot>();
             redoStacks[norm] = redo;
         }
-        redo.Push(current.ToBytes());
+        redo.Push(new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm)));
 
-        byte[] prevBytes = undo.Pop();
-        WzValue restored = WzValue.Parse(prevBytes);
+        ImageUndoSnapshot prev = undo.Pop();
+        WzValue restored = WzValue.Parse(prev.ImageBytes);
         loadedImages[norm] = restored;
-        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) && restored.Equals(baseImg)) {
-            modifiedImages.Remove(norm);
-        } else {
-            modifiedImages.Add(norm);
-        }
+        deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(prev.DeletedProperties, StringComparer.Ordinal);
+        SyncDeletedProperties(norm);
+        UpdateImageModifiedFlag(norm);
         return true;
     }
 
     public bool Redo(string imagePath) {
         string norm = NormalizePath(imagePath);
-        if (!redoStacks.TryGetValue(norm, out Stack<byte[]>? redo) || redo.Count == 0) {
+        if (!redoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? redo) || redo.Count == 0) {
             return false;
         }
 
         WzValue current = GetOrParseImage(norm);
-        if (!undoStacks.TryGetValue(norm, out Stack<byte[]>? undo)) {
-            undo = new Stack<byte[]>();
+        if (!undoStacks.TryGetValue(norm, out Stack<ImageUndoSnapshot>? undo)) {
+            undo = new Stack<ImageUndoSnapshot>();
             undoStacks[norm] = undo;
         }
-        undo.Push(current.ToBytes());
+        undo.Push(new ImageUndoSnapshot(current.ToBytes(), CloneDeletedMap(norm)));
 
-        byte[] nextBytes = redo.Pop();
-        WzValue restored = WzValue.Parse(nextBytes);
+        ImageUndoSnapshot next = redo.Pop();
+        WzValue restored = WzValue.Parse(next.ImageBytes);
         loadedImages[norm] = restored;
-        if (baselineImages.TryGetValue(norm, out WzValue? baseImg) && restored.Equals(baseImg)) {
-            modifiedImages.Remove(norm);
-        } else {
-            modifiedImages.Add(norm);
-        }
+        deletedPropertiesByImage[norm] = new Dictionary<string, DeletedPropertyEntry>(next.DeletedProperties, StringComparer.Ordinal);
+        SyncDeletedProperties(norm);
+        UpdateImageModifiedFlag(norm);
         return true;
     }
 
@@ -728,6 +969,8 @@ public sealed class ArchiveSession : IDisposable {
                     IsUserAdded = true,
                 };
                 cur.Children.Add(next);
+            } else {
+                next.IsDeleted = false;
             }
             cur = next;
         }
@@ -738,6 +981,8 @@ public sealed class ArchiveSession : IDisposable {
             cur.Children.Add(new VirtualFsNode(leafName, WzNodeKind.Image) {
                 IsUserAdded = true,
             });
+        } else {
+            existing.IsDeleted = false;
         }
         loadedImages[norm] = rootValue;
         modifiedImages.Add(norm);
@@ -752,6 +997,7 @@ public sealed class ArchiveSession : IDisposable {
         }
         VirtualFsNode? existing = parent.Children.Find(c => c.Name == dirName);
         if (existing is not null) {
+            existing.IsDeleted = false;
             return existing;
         }
         var created = new VirtualFsNode(dirName, WzNodeKind.Directory) {
@@ -776,29 +1022,77 @@ public sealed class ArchiveSession : IDisposable {
         if (parent is null) {
             return false;
         }
-        int removed = parent.Children.RemoveAll(c => c.Name == leafName);
-        if (removed == 0) {
+        VirtualFsNode? target = parent.Children.Find(c => c.Name == leafName);
+        if (target is null || target.IsDeleted) {
             return false;
         }
 
+        target.IsDeleted = true;
         parent.HasChildStructureChanges = true;
-        loadedImages.Remove(norm);
-        baselineImages.Remove(norm);
-        modifiedImages.Remove(norm);
-        undoStacks.Remove(norm);
-        redoStacks.Remove(norm);
-
-        string prefix = norm + "/";
-        foreach (string key in loadedImages.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToArray()) {
-            loadedImages.Remove(key);
-            baselineImages.Remove(key);
-            modifiedImages.Remove(key);
-            undoStacks.Remove(key);
-            redoStacks.Remove(key);
-        }
-
         HasStructureChanges = true;
         return true;
+    }
+
+    public bool RestoreVirtualNode(string path) {
+        string norm = NormalizePath(path);
+        if (string.IsNullOrEmpty(norm)) {
+            return false;
+        }
+
+        bool restoredAny = false;
+        VirtualFsNode cur = VirtualRoot;
+        foreach (string part in norm.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
+            if (cur.IsDir) {
+                EnsureDirectoryLinked(cur);
+            }
+            VirtualFsNode? next = cur.Children.Find(c => c.Name == part)
+                ?? cur.Children.Find(c => string.Equals(c.Name, part, StringComparison.OrdinalIgnoreCase));
+            if (next is null) {
+                return false;
+            }
+            if (next.IsDeleted) {
+                next.IsDeleted = false;
+                restoredAny = true;
+            }
+            cur = next;
+        }
+
+        static void RestoreDescendants(VirtualFsNode node, ref bool changed) {
+            foreach (VirtualFsNode child in node.Children) {
+                if (child.IsDeleted) {
+                    child.IsDeleted = false;
+                    changed = true;
+                }
+                if (child.IsDir) {
+                    RestoreDescendants(child, ref changed);
+                }
+            }
+        }
+
+        if (cur.IsDir) {
+            RestoreDescendants(cur, ref restoredAny);
+        }
+
+        if (restoredAny) {
+            RecomputeStructureChangeFlags(VirtualRoot);
+            HasStructureChanges = VirtualRoot.HasChildStructureChanges ||
+                VirtualRoot.Children.Any(c => c.IsUserAdded || c.IsDeleted || c.HasChildStructureChanges);
+        }
+        return restoredAny;
+    }
+
+    private static bool RecomputeStructureChangeFlags(VirtualFsNode dir) {
+        bool dirty = false;
+        foreach (VirtualFsNode child in dir.Children) {
+            if (child.IsUserAdded || child.IsDeleted) {
+                dirty = true;
+            }
+            if (child.IsDir && RecomputeStructureChangeFlags(child)) {
+                dirty = true;
+            }
+        }
+        dir.HasChildStructureChanges = dirty;
+        return dirty;
     }
 
     public bool RenameVirtualNode(string path, string newLeafName) {
@@ -861,6 +1155,9 @@ public sealed class ArchiveSession : IDisposable {
         void CollectRecursive(VirtualFsNode dir, string prefix) {
             EnsureDirectoryLinked(dir);
             foreach (VirtualFsNode child in dir.Children) {
+                if (child.IsDeleted) {
+                    continue;
+                }
                 string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
                 if (child.IsDir) {
                     CollectRecursive(child, fullPath);
@@ -900,6 +1197,7 @@ public sealed class ArchiveSession : IDisposable {
             }
             baselineImages.Clear();
             modifiedImages.Clear();
+            deletedPropertiesByImage.Clear();
             HasStructureChanges = false;
             IsUserCreatedArchive = false;
         }

@@ -254,16 +254,13 @@ public sealed class RepackerEngineTests {
 
         TreeNodeDto[] infoChildren = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
         TreeNodeDto islotChild = Assert.Single(infoChildren, n => n.Name == "islot");
-        Assert.False(islotChild.IsModified);
-        Assert.False(islotChild.IsAdded);
+        Assert.Equal(RepackerChangeState.Unchanged, islotChild.ChangeState);
 
         TreeNodeDto reqLevelChild = Assert.Single(infoChildren, n => n.Name == "reqLevel");
-        Assert.True(reqLevelChild.IsModified);
-        Assert.False(reqLevelChild.IsAdded);
+        Assert.Equal(RepackerChangeState.Modified, reqLevelChild.ChangeState);
 
         TreeNodeDto customTagChild = Assert.Single(infoChildren, n => n.Name == "customTag");
-        Assert.True(customTagChild.IsAdded);
-        Assert.False(customTagChild.IsModified);
+        Assert.Equal(RepackerChangeState.Added, customTagChild.ChangeState);
 
         (bool renOk, string? renErr, string newPath) = workspace.RenameNode(
             charArchiveId,
@@ -281,6 +278,26 @@ public sealed class RepackerEngineTests {
 
         (bool delOk, string? delErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
         Assert.True(delOk, delErr);
+
+        TreeNodeDto[] infoAfterDel = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
+        TreeNodeDto deletedTreeEntry = Assert.Single(infoAfterDel, n => n.Path == pastedPath);
+        Assert.Equal(RepackerChangeState.Deleted, deletedTreeEntry.ChangeState);
+
+        NodeInspectionDto deletedInspect = workspace.InspectNode(charArchiveId, pastedPath);
+        Assert.True(deletedInspect.Ok, deletedInspect.Error);
+        Assert.Equal(RepackerChangeState.Deleted, deletedInspect.ChangeState);
+        Assert.Contains(deletedInspect.Children, c => c.Path == pastedPath && c.ChangeState == RepackerChangeState.Deleted);
+
+        (bool restoreOk, string? restoreErr, string restoredPath) = workspace.RestoreNode(charArchiveId, pastedPath);
+        Assert.True(restoreOk, restoreErr);
+        Assert.Equal(pastedPath, restoredPath);
+
+        TreeNodeDto[] infoAfterRestore = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
+        TreeNodeDto restoredTreeEntry = Assert.Single(infoAfterRestore, n => n.Path == pastedPath);
+        Assert.NotEqual(RepackerChangeState.Deleted, restoredTreeEntry.ChangeState);
+
+        (bool delAgainOk, string? delAgainErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
+        Assert.True(delAgainOk, delAgainErr);
 
         // 7. Global search across archives
         SearchResultItemDto[] hits = workspace.Search(new SearchQueryDto {

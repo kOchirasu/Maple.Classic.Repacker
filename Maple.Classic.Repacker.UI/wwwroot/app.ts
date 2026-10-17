@@ -10,6 +10,12 @@ interface Window {
     MapleCM6?: {
         createEditor(hostElement: HTMLElement, options?: { initialValue?: string; onSave?: () => void }): Cm6EditorBridge;
     };
+    chrome?: {
+        webview?: {
+            postMessage(message: unknown): void;
+            addEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
+        };
+    };
 }
 
 namespace MapleRepacker {
@@ -75,8 +81,9 @@ namespace MapleRepacker {
         // Sound Player Object URL
         private activeAudioUrl: string | null = null;
 
-        // Children Table Minimize State
+        // Children Table Minimize & Resize State
         private childrenTableMinimized = false;
+        private childrenTableHeight = 185;
         private lastInspectedLayerKey = '';
 
         // Hex Inspector State
@@ -119,7 +126,7 @@ namespace MapleRepacker {
             });
         }
 
-        private showToast(message: string, kind: 'info' | 'success' | 'error' = 'info'): void {
+        private showToast(message: string, kind: ToastKind = ToastKind.Info): void {
             const container = document.getElementById('toastContainer');
             if (!container) return;
             const item = document.createElement('div');
@@ -140,6 +147,19 @@ namespace MapleRepacker {
                 this.appliedInitialUiState = true;
                 if (status.uiState.layout) {
                     this.layout.applySavedLayout(status.uiState.layout);
+                }
+                if (status.uiState.canvasBackground) {
+                    const bg = status.uiState.canvasBackground;
+                    document.querySelectorAll('[data-bg]').forEach((b) => {
+                        b.classList.toggle('active', (b as HTMLElement).dataset.bg === bg);
+                    });
+                    const viewport = document.getElementById('canvasViewport');
+                    if (viewport) {
+                        viewport.className = `canvas-viewport bg-${bg.toLowerCase()}`;
+                    }
+                }
+                if (status.uiState.activeWorkbenchTab) {
+                    this.activateWorkbenchTab(status.uiState.activeWorkbenchTab, false);
                 }
                 if (typeof status.uiState.showOriginCrosshair === 'boolean') {
                     this.showOrigin = status.uiState.showOriginCrosshair;
@@ -277,7 +297,7 @@ namespace MapleRepacker {
         }
 
         private async invalidateAndRefreshTreeBranch(archiveId: string, path: string): Promise<void> {
-            // Refresh root + ancestor chain along path
+            // Refresh root + ancestor chain along path + any expanded descendants
             await this.fetchTreeChildren(archiveId, '');
             const parts = path.split('/').filter((p) => p.length > 0);
             let accum = '';
@@ -286,6 +306,15 @@ namespace MapleRepacker {
                 const key = this.makeCacheKey(archiveId, accum);
                 if (this.treeState.expandedKeys.has(key) || accum === path) {
                     await this.fetchTreeChildren(archiveId, accum);
+                }
+            }
+            if (path) {
+                const descPrefix = `${archiveId}::${path}/`;
+                for (const expKey of Array.from(this.treeState.expandedKeys)) {
+                    if (expKey.startsWith(descPrefix)) {
+                        const subPath = expKey.slice(`${archiveId}::`.length);
+                        await this.fetchTreeChildren(archiveId, subPath);
+                    }
                 }
             }
             this.renderTree();
@@ -343,11 +372,12 @@ namespace MapleRepacker {
                 rootRow.dataset.archiveId = ar.archiveId;
                 rootRow.dataset.path = '';
 
-                const rootStatusDot = ar.isAdded
-                    ? '<span class="tree-add-dot" title="Added"></span>'
-                    : ar.isModified
-                      ? '<span class="tree-mod-dot" title="Modified"></span>'
-                      : '';
+                const rootStatusDot =
+                    ar.changeState === RepackerChangeState.Added
+                        ? '<span class="tree-add-dot" title="Added"></span>'
+                        : ar.changeState === RepackerChangeState.Modified
+                          ? '<span class="tree-mod-dot" title="Modified"></span>'
+                          : '';
 
                 rootRow.innerHTML = `
                     <span class="tree-twisty">${isRootExpanded ? '&#9662;' : '&#9656;'}</span>
@@ -369,7 +399,7 @@ namespace MapleRepacker {
                 rootRow.addEventListener('contextmenu', (ev) => {
                     ev.preventDefault();
                     ev.stopPropagation();
-                    this.openContextMenu(ev.clientX, ev.clientY, ar.archiveId, '');
+                    this.openContextMenu(ev.clientX, ev.clientY, ar.archiveId, '', ar.changeState);
                 });
 
                 container.appendChild(rootRow);
@@ -405,22 +435,26 @@ namespace MapleRepacker {
                 }
 
                 const isSelected = archiveId === this.selectedArchiveId && node.path === this.selectedPath;
+                const isNodeDeleted = node.changeState === RepackerChangeState.Deleted;
                 const row = document.createElement('div');
-                row.className = `tree-row${isSelected ? ' selected' : ''}`;
+                row.className = `tree-row${isSelected ? ' selected' : ''}${isNodeDeleted ? ' deleted' : ''}`;
                 row.style.paddingLeft = `${6 + depth * 15}px`;
                 row.dataset.archiveId = archiveId;
                 row.dataset.path = node.path;
 
-                const canExpand = node.hasChildren || node.nodeKind === 'Directory';
+                const canExpand = node.hasChildren || node.nodeKind === RepackerNodeKind.Directory;
                 const twistyChar = node.hasChildren ? (isExpanded ? '&#9662;' : '&#9656;') : '';
                 const valPreview = node.displayValue
                     ? `<span class="tree-val-preview" title="${this.escapeHtml(node.displayValue)}">${this.escapeHtml(node.displayValue)}</span>`
                     : '';
-                const statusDot = node.isAdded
-                    ? '<span class="tree-add-dot" title="Added"></span>'
-                    : node.isModified
-                      ? '<span class="tree-mod-dot" title="Modified"></span>'
-                      : '';
+                const statusDot =
+                    node.changeState === RepackerChangeState.Deleted
+                        ? '<span class="tree-del-dot" title="Deleted"></span>'
+                        : node.changeState === RepackerChangeState.Added
+                          ? '<span class="tree-add-dot" title="Added"></span>'
+                          : node.changeState === RepackerChangeState.Modified
+                            ? '<span class="tree-mod-dot" title="Modified"></span>'
+                            : '';
 
                 row.innerHTML = `
                     <span class="tree-twisty">${twistyChar}</span>
@@ -446,7 +480,7 @@ namespace MapleRepacker {
                 row.addEventListener('contextmenu', (ev) => {
                     ev.preventDefault();
                     ev.stopPropagation();
-                    this.openContextMenu(ev.clientX, ev.clientY, archiveId, node.path);
+                    this.openContextMenu(ev.clientX, ev.clientY, archiveId, node.path, node.changeState);
                 });
 
                 container.appendChild(row);
@@ -535,7 +569,7 @@ namespace MapleRepacker {
                 path,
             });
             if (!res.ok || !res.data) {
-                this.showToast(res.data?.error || 'Failed to inspect node', 'error');
+                this.showToast(res.data?.error || 'Failed to inspect node', ToastKind.Error);
                 return;
             }
 
@@ -555,17 +589,17 @@ namespace MapleRepacker {
             // 1. Breadcrumbs & Meta Chips
             this.renderBreadcrumbs(dto);
 
-            // Sync Child Nodes Table minimize state before measuring Canvas viewport
+            // Sync Child Nodes Table minimize & height state before measuring Canvas viewport
             this.syncChildrenTableMinimizedState(dto);
 
-            // 2. Canvas / Animation Viewport
-            await this.renderCanvasOrAnimationStage(dto);
-
-            // 3. Sound_DX8 Audio Studio
+            // 2. Sound_DX8 Audio Studio
             this.renderSoundStage(dto);
 
-            // 4. String Stage Preview
+            // 3. String Stage Preview
             this.renderStringStage(dto);
+
+            // 4. Canvas / Animation Viewport
+            await this.renderCanvasOrAnimationStage(dto);
 
             // 5. Child Nodes Table
             this.renderChildrenTable(dto);
@@ -619,11 +653,14 @@ namespace MapleRepacker {
             });
 
             const metaBadges = document.getElementById('stageMetaBadges')!;
-            const changeChip = dto.isAdded
-                ? '<span class="meta-chip" style="color:var(--accent-green); border-color:var(--accent-green-border); background:var(--accent-green-bg)">ADDED</span>'
-                : dto.isModified
-                  ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>'
-                  : '';
+            const changeChip =
+                dto.changeState === RepackerChangeState.Deleted
+                    ? '<span class="meta-chip" style="color:var(--accent-danger); border-color:var(--accent-danger-border); background:var(--accent-danger-bg)">DELETED</span>'
+                    : dto.changeState === RepackerChangeState.Added
+                      ? '<span class="meta-chip" style="color:var(--accent-green); border-color:var(--accent-green-border); background:var(--accent-green-bg)">ADDED</span>'
+                      : dto.changeState === RepackerChangeState.Modified
+                        ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>'
+                        : '';
             metaBadges.innerHTML = `
                 <span class="meta-chip">${this.escapeHtml(dto.typeBadge)}</span>
                 <span class="meta-chip">${formatByteSize(dto.sizeBytes)}</span>
@@ -665,7 +702,7 @@ namespace MapleRepacker {
 
             if (dto.canvas) {
                 const fmtSelect = document.getElementById('canvasFormatSelect') as HTMLSelectElement;
-                fmtSelect.value = String(dto.canvas.format || 2);
+                fmtSelect.value = dto.canvas.format || WzCanvasFormat.Bgra8888;
             }
 
             // Decode frames into HTMLImageElements
@@ -791,6 +828,16 @@ namespace MapleRepacker {
             }, delay);
         }
 
+        private updateAnimPlayPauseButton(): void {
+            const playBtn = document.getElementById('btnAnimPlayPause');
+            if (!playBtn) return;
+            playBtn.classList.toggle('play', !this.animPlaying);
+            playBtn.classList.toggle('stop', this.animPlaying);
+            playBtn.innerHTML = this.animPlaying
+                ? '<span class="anim-btn-icon">&#9632;</span><span>Stop</span>'
+                : '<span class="anim-btn-icon">&#9654;</span><span>Play</span>';
+        }
+
         private renderAnimationPlayerBar(): void {
             const bar = document.getElementById('animPlayerBar')!;
             const strip = document.getElementById('animTimelineStrip')!;
@@ -802,8 +849,7 @@ namespace MapleRepacker {
             }
             bar.classList.remove('hidden');
 
-            const playBtn = document.getElementById('btnAnimPlayPause')!;
-            playBtn.textContent = this.animPlaying ? 'Stop' : 'Play';
+            this.updateAnimPlayPauseButton();
 
             this.decodedFrames.forEach((f, idx) => {
                 const pill = document.createElement('button');
@@ -1127,6 +1173,16 @@ namespace MapleRepacker {
             return `${dto.archiveId}::${parentPath}::${parts.length}`;
         }
 
+        private hasStagePreview(dto: NodeInspectionDto | null): boolean {
+            if (!dto) return false;
+            const hasCanvas =
+                Boolean(dto.canvas && dto.canvas.pngBytes) ||
+                (Array.isArray(dto.animationFrames) && dto.animationFrames.length > 0);
+            const hasSound = Boolean(dto.sound && dto.sound.audioBytes);
+            const hasString = Boolean(this.getActiveStringPreviewTarget(dto));
+            return hasCanvas || hasSound || hasString;
+        }
+
         private syncChildrenTableMinimizedState(dto: NodeInspectionDto): void {
             const layerKey = this.getNodeLayerKey(dto);
 
@@ -1135,7 +1191,7 @@ namespace MapleRepacker {
             }
 
             this.lastInspectedLayerKey = layerKey;
-            this.applyChildrenTableMinimizedDom();
+            this.applyChildrenTableMinimizedDom(this.hasStagePreview(dto));
         }
 
         private toggleChildrenTableMinimized(): void {
@@ -1144,14 +1200,30 @@ namespace MapleRepacker {
             this.drawActiveCanvasFrame();
         }
 
-        private applyChildrenTableMinimizedDom(): void {
+        private applyChildrenTableMinimizedDom(hasPreviewOverride?: boolean): void {
             const section = document.getElementById('childrenTableSection');
+            const splitter = document.getElementById('childrenTableSplitter');
             const btn = document.getElementById('btnToggleChildrenTable');
+            const hasPreview =
+                typeof hasPreviewOverride === 'boolean'
+                    ? hasPreviewOverride
+                    : this.hasStagePreview(this.currentInspection);
+
+            if (splitter) {
+                splitter.classList.toggle('hidden', !hasPreview);
+            }
             if (section) {
                 section.classList.toggle('minimized', this.childrenTableMinimized);
+                if (hasPreview && !this.childrenTableMinimized) {
+                    section.style.flex = '0 0 auto';
+                    section.style.height = `${Math.round(this.childrenTableHeight)}px`;
+                } else {
+                    section.style.flex = '';
+                    section.style.height = '';
+                }
             }
             if (btn) {
-                btn.innerHTML = this.childrenTableMinimized ? '&#9652; Expand' : '&#9662; Minimize';
+                btn.innerHTML = this.childrenTableMinimized ? '&#9652;' : '&#9662;';
                 btn.title = this.childrenTableMinimized
                     ? 'Expand child nodes table'
                     : 'Minimize child nodes table';
@@ -1184,9 +1256,16 @@ namespace MapleRepacker {
             for (const c of children) {
                 const tr = document.createElement('tr');
                 tr.dataset.path = c.path;
+                const rowClasses: string[] = [];
                 if (c.path === highlightedPath) {
-                    tr.className = 'active-row';
+                    rowClasses.push('active-row');
                     activeRowEl = tr;
+                }
+                if (c.changeState === RepackerChangeState.Deleted) {
+                    rowClasses.push('deleted-row');
+                }
+                if (rowClasses.length > 0) {
+                    tr.className = rowClasses.join(' ');
                 }
                 const sizeOrItems =
                     c.sizeBytes > 0
@@ -1203,7 +1282,13 @@ namespace MapleRepacker {
                 `;
 
                 tr.addEventListener('click', () => {
+                    this.closeContextMenu();
                     void this.selectAndInspectNode(dto.archiveId, c.path, true);
+                });
+                tr.addEventListener('contextmenu', (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this.openContextMenu(ev.clientX, ev.clientY, dto.archiveId, c.path, c.changeState);
                 });
                 tbody.appendChild(tr);
             }
@@ -1229,14 +1314,20 @@ namespace MapleRepacker {
             document.getElementById('inspectorTypePill')!.textContent = dto.typeBadge;
 
             const isArchiveRoot = !dto.path || dto.nodeKind === RepackerNodeKind.Archive;
-            document.getElementById('btnRenameNode')!.classList.toggle('hidden', isArchiveRoot);
+            const isDeleted = dto.changeState === RepackerChangeState.Deleted;
+            document.getElementById('btnRenameNode')!.classList.toggle('hidden', isArchiveRoot || isDeleted);
             const deleteBtn = document.getElementById('btnDeleteNode')!;
-            deleteBtn.textContent = isArchiveRoot ? 'Close' : 'Delete';
-            deleteBtn.title = isArchiveRoot ? 'Close WZ archive (Del)' : 'Delete selected node (Del)';
+            deleteBtn.textContent = isArchiveRoot ? 'Close' : isDeleted ? 'Restore' : 'Delete';
+            deleteBtn.title = isArchiveRoot
+                ? 'Close WZ archive (Del)'
+                : isDeleted
+                  ? 'Restore deleted node'
+                  : 'Delete selected node (Del)';
+            deleteBtn.classList.toggle('danger', !isDeleted);
 
-            (document.getElementById('btnInspAddChild') as HTMLButtonElement).disabled = isArchiveRoot;
-            (document.getElementById('btnInspDuplicate') as HTMLButtonElement).disabled = isArchiveRoot;
-            (document.getElementById('btnInspCopy') as HTMLButtonElement).disabled = isArchiveRoot;
+            (document.getElementById('btnInspAddChild') as HTMLButtonElement).disabled = isArchiveRoot || isDeleted;
+            (document.getElementById('btnInspDuplicate') as HTMLButtonElement).disabled = isArchiveRoot || isDeleted;
+            (document.getElementById('btnInspCopy') as HTMLButtonElement).disabled = isArchiveRoot || isDeleted;
 
             const metaGrid = document.getElementById('inspectorMetaGrid')!;
             metaGrid.innerHTML = `
@@ -1250,6 +1341,7 @@ namespace MapleRepacker {
 
             const editorCard = document.getElementById('valueEditorCard')!;
             const isEditableProperty =
+                !isDeleted &&
                 dto.nodeKind === RepackerNodeKind.Property &&
                 dto.propertyKind !== RepackerPropertyKind.Object &&
                 dto.propertyKind !== RepackerPropertyKind.Convex &&
@@ -1434,14 +1526,18 @@ namespace MapleRepacker {
 
             document.addEventListener('contextmenu', (ev) => {
                 const target = ev.target as HTMLElement | null;
-                if (!target?.closest('.tree-row') && !target?.closest('#treeContextMenu')) {
+                if (
+                    !target?.closest('.tree-row') &&
+                    !target?.closest('#childrenTableBody tr') &&
+                    !target?.closest('#treeContextMenu')
+                ) {
                     this.closeContextMenu();
                 }
             });
 
             menuBar.querySelectorAll('[data-action]').forEach((btn) => {
                 btn.addEventListener('click', () => {
-                    const action = (btn as HTMLElement).dataset.action || '';
+                    const action = ((btn as HTMLElement).dataset.action || '') as MenuBarAction;
                     items.forEach((other) => other.classList.remove('open'));
                     this.dispatchMenuAction(action);
                 });
@@ -1477,10 +1573,10 @@ namespace MapleRepacker {
                     if (res.ok && res.data.archiveId) {
                         this.clearArchiveTreeCache(res.data.archiveId);
                         lastArchiveId = res.data.archiveId;
-                        this.showToast(`Loaded ${file.name}`, 'success');
+                        this.showToast(`Loaded ${file.name}`, ToastKind.Success);
                         await this.fetchTreeChildren(res.data.archiveId, '');
                     } else {
-                        this.showToast(res.data?.error || `Failed to open ${file.name}`, 'error');
+                        this.showToast(res.data?.error || `Failed to open ${file.name}`, ToastKind.Error);
                     }
                 }
                 if (lastArchiveId) {
@@ -1494,7 +1590,9 @@ namespace MapleRepacker {
                 pngInput.value = '';
                 if (!file || !this.selectedArchiveId || !this.selectedPath) return;
                 const bytes = new Uint8Array(await file.arrayBuffer());
-                const fmt = Number((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value) || 2;
+                const fmt =
+                    ((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value as WzCanvasFormat) ||
+                    WzCanvasFormat.Bgra8888;
                 const res = await rpcCall<RpcOperationResponse>('node.replaceCanvas', {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
@@ -1502,11 +1600,11 @@ namespace MapleRepacker {
                     format: fmt,
                 });
                 if (res.ok) {
-                    this.showToast(`Replaced Canvas with ${file.name}`, 'success');
+                    this.showToast(`Replaced Canvas with ${file.name}`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                     await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to import PNG', 'error');
+                    this.showToast(res.data?.error || 'Failed to import PNG', ToastKind.Error);
                 }
             });
 
@@ -1522,11 +1620,11 @@ namespace MapleRepacker {
                     audioBytes: bytes,
                 });
                 if (res.ok) {
-                    this.showToast(`Replaced Sound_DX8 with ${file.name}`, 'success');
+                    this.showToast(`Replaced Sound_DX8 with ${file.name}`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                     await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to import audio', 'error');
+                    this.showToast(res.data?.error || 'Failed to import audio', ToastKind.Error);
                 }
             });
 
@@ -1538,97 +1636,106 @@ namespace MapleRepacker {
             });
         }
 
-        private dispatchMenuAction(action: string): void {
+        private dispatchMenuAction(action: MenuBarAction): void {
             switch (action) {
-                case 'openFileModal':
+                case MenuBarAction.OpenFileModal:
                     this.triggerOpenWzFile();
                     break;
-                case 'openDirModal':
+                case MenuBarAction.OpenDirModal:
                     this.triggerOpenDirectory();
                     break;
-                case 'newArchiveModal':
+                case MenuBarAction.NewArchiveModal:
                     this.openNewArchiveModal();
                     break;
-                case 'saveArchiveDisk':
+                case MenuBarAction.SaveArchiveDisk:
                     this.openSaveRepackModal();
                     break;
-                case 'downloadArchive':
+                case MenuBarAction.DownloadArchive:
                     void this.downloadCurrentArchive();
                     break;
-                case 'closeActiveArchive':
+                case MenuBarAction.CloseActiveArchive:
                     void this.closeActiveArchive();
                     break;
-                case 'undoNode':
+                case MenuBarAction.UndoNode:
                     void this.undoSelectedImage();
                     break;
-                case 'redoNode':
+                case MenuBarAction.RedoNode:
                     void this.redoSelectedImage();
                     break;
-                case 'addPropertyModal':
+                case MenuBarAction.AddPropertyModal:
                     this.openAddPropertyModal();
                     break;
-                case 'addImageModal':
+                case MenuBarAction.AddImageModal:
                     this.openAddImageModal();
                     break;
-                case 'addDirectoryModal':
+                case MenuBarAction.AddDirectoryModal:
                     this.openAddDirectoryModal();
                     break;
-                case 'copyNode':
+                case MenuBarAction.CopyNode:
                     void this.copySelectedNode();
                     break;
-                case 'pasteNode':
+                case MenuBarAction.PasteNode:
                     void this.pasteIntoSelectedNode();
                     break;
-                case 'duplicateNode':
+                case MenuBarAction.DuplicateNode:
                     void this.duplicateSelectedNode();
                     break;
-                case 'renameNodePrompt':
+                case MenuBarAction.RenameNodePrompt:
                     this.openRenameModal();
                     break;
-                case 'deleteNode':
+                case MenuBarAction.DeleteNode:
                     void this.deleteSelectedNode();
                     break;
-                case 'focusGlobalSearch':
+                case MenuBarAction.FocusGlobalSearch:
                     this.focusGlobalSearch();
                     break;
-                case 'inlineOutlinksNode':
+                case MenuBarAction.InlineOutlinksNode:
                     void this.inlineLinksInCurrentScope();
                     break;
-                case 'openBatchExportTab':
-                    this.activateWorkbenchTab('batch');
+                case MenuBarAction.OpenBatchExportTab:
+                    this.activateWorkbenchTab(RepackerWorkbenchTab.Batch);
                     break;
-                case 'exportSelectedJson':
-                    void this.exportCurrentNode('json');
+                case MenuBarAction.ExportSelectedJson:
+                    void this.exportCurrentNode(RepackerExportFormat.Json);
                     break;
-                case 'exportSelectedImg':
-                    void this.exportCurrentNode('img');
+                case MenuBarAction.ExportSelectedImg:
+                    void this.exportCurrentNode(RepackerExportFormat.Img);
                     break;
-                case 'toggleCrosshair': {
+                case MenuBarAction.ToggleCrosshair: {
                     const chk = document.getElementById('chkShowOrigin') as HTMLInputElement;
                     chk.checked = !chk.checked;
                     this.showOrigin = chk.checked;
                     this.drawActiveCanvasFrame();
                     break;
                 }
-                case 'toggleVectors': {
+                case MenuBarAction.ToggleVectors: {
                     const chk = document.getElementById('chkShowVectors') as HTMLInputElement;
                     chk.checked = !chk.checked;
                     this.showVectors = chk.checked;
                     this.drawActiveCanvasFrame();
                     break;
                 }
-                case 'togglePixelGrid': {
+                case MenuBarAction.TogglePixelGrid: {
                     const chk = document.getElementById('chkShowPixelGrid') as HTMLInputElement;
                     chk.checked = !chk.checked;
                     this.showPixelGrid = chk.checked;
                     this.drawActiveCanvasFrame();
                     break;
                 }
-                case 'toggleWorkbench':
-                    this.layout.toggleWorkbench();
+                case MenuBarAction.ToggleInspector:
+                    this.layout.toggleInspector();
+                    this.drawActiveCanvasFrame();
                     break;
-                case 'resetLayout':
+                case MenuBarAction.ToggleWorkbench:
+                    this.layout.toggleWorkbench();
+                    this.drawActiveCanvasFrame();
+                    break;
+                case MenuBarAction.ResetLayout:
                     this.layout.resetLayout();
+                    this.childrenTableHeight = 185;
+                    this.childrenTableMinimized = false;
+                    this.applyChildrenTableMinimizedDom();
+                    this.drawActiveCanvasFrame();
                     break;
             }
         }
@@ -1658,89 +1765,166 @@ namespace MapleRepacker {
             const ctxMenu = document.getElementById('treeContextMenu')!;
             ctxMenu.querySelectorAll('[data-ctx]').forEach((btn) => {
                 btn.addEventListener('click', async () => {
-                    const cmd = (btn as HTMLElement).dataset.ctx || '';
+                    const cmd = ((btn as HTMLElement).dataset.ctx || '') as TreeContextMenuCommand;
                     const targetArchiveId = this.ctxTargetArchiveId;
                     const targetPath = this.ctxTargetPath;
                     this.closeContextMenu();
-
-                    if (cmd === 'closeArchive') {
-                        if (targetArchiveId) {
-                            await this.requestCloseArchive(targetArchiveId);
-                        }
-                        return;
-                    }
-
-                    if (targetArchiveId) {
-                        await this.selectAndInspectNode(targetArchiveId, targetPath, false);
-                    }
-                    switch (cmd) {
-                        case 'addProp':
-                            this.openAddPropertyModal();
-                            break;
-                        case 'addImg':
-                            this.openAddImageModal();
-                            break;
-                        case 'addDir':
-                            this.openAddDirectoryModal();
-                            break;
-                        case 'copy':
-                            await this.copySelectedNode();
-                            break;
-                        case 'paste':
-                            await this.pasteIntoSelectedNode();
-                            break;
-                        case 'duplicate':
-                            await this.duplicateSelectedNode();
-                            break;
-                        case 'rename':
-                            this.openRenameModal();
-                            break;
-                        case 'inlineLinks':
-                            await this.inlineLinksInCurrentScope();
-                            break;
-                        case 'exportAuto':
-                            if (!targetPath) {
-                                await this.downloadCurrentArchive();
-                            } else {
-                                await this.exportCurrentNode('auto');
-                            }
-                            break;
-                        case 'delete':
-                            await this.deleteSelectedNode();
-                            break;
-                    }
+                    await this.executeContextMenuCommand(cmd, targetArchiveId, targetPath);
                 });
             });
+
+            window.chrome?.webview?.addEventListener('message', (ev: MessageEvent) => {
+                try {
+                    const data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
+                    if (!data || typeof data.type !== 'string') {
+                        return;
+                    }
+                    if (data.type === HostWebMessageType.TreeContextMenuCommand) {
+                        void this.executeContextMenuCommand(
+                            String(data.cmd || '') as TreeContextMenuCommand,
+                            String(data.archiveId || ''),
+                            String(data.path || '')
+                        );
+                    } else if (data.type === HostWebMessageType.RequestAppClose) {
+                        this.handleAppCloseRequest();
+                    }
+                } catch {
+                    // Ignore malformed host messages
+                }
+            });
+
+            window.addEventListener('beforeunload', (ev: BeforeUnloadEvent) => {
+                if (!window.chrome?.webview && this.getDirtyArchives().length > 0) {
+                    ev.preventDefault();
+                    ev.returnValue = '';
+                }
+            });
+        }
+
+        private async executeContextMenuCommand(
+            cmd: TreeContextMenuCommand,
+            targetArchiveId: string,
+            targetPath: string
+        ): Promise<void> {
+            if (cmd === TreeContextMenuCommand.CloseArchive) {
+                if (targetArchiveId) {
+                    await this.requestCloseArchive(targetArchiveId);
+                }
+                return;
+            }
+
+            if (targetArchiveId) {
+                await this.selectAndInspectNode(targetArchiveId, targetPath, false);
+            }
+            switch (cmd) {
+                case TreeContextMenuCommand.AddProp:
+                    this.openAddPropertyModal();
+                    break;
+                case TreeContextMenuCommand.AddImg:
+                    this.openAddImageModal();
+                    break;
+                case TreeContextMenuCommand.AddDir:
+                    this.openAddDirectoryModal();
+                    break;
+                case TreeContextMenuCommand.Copy:
+                    await this.copySelectedNode();
+                    break;
+                case TreeContextMenuCommand.Paste:
+                    await this.pasteIntoSelectedNode();
+                    break;
+                case TreeContextMenuCommand.Duplicate:
+                    await this.duplicateSelectedNode();
+                    break;
+                case TreeContextMenuCommand.Rename:
+                    this.openRenameModal();
+                    break;
+                case TreeContextMenuCommand.InlineLinks:
+                    await this.inlineLinksInCurrentScope();
+                    break;
+                case TreeContextMenuCommand.ExportAuto:
+                    if (!targetPath) {
+                        await this.downloadCurrentArchive();
+                    } else {
+                        await this.exportCurrentNode(RepackerExportFormat.Auto);
+                    }
+                    break;
+                case TreeContextMenuCommand.Delete:
+                    await this.deleteSelectedNode();
+                    break;
+                case TreeContextMenuCommand.Restore:
+                    await this.restoreSelectedNode();
+                    break;
+            }
         }
 
         private closeContextMenu(): void {
             document.getElementById('treeContextMenu')?.classList.add('hidden');
+            if (window.chrome?.webview?.postMessage) {
+                window.chrome.webview.postMessage(JSON.stringify({ type: HostWebMessageType.CloseTreeContextMenu }));
+            }
         }
 
-        private openContextMenu(x: number, y: number, archiveId: string, path: string): void {
+        private openContextMenu(
+            x: number,
+            y: number,
+            archiveId: string,
+            path: string,
+            changeState: RepackerChangeState = RepackerChangeState.Unchanged
+        ): void {
             this.ctxTargetArchiveId = archiveId;
             this.ctxTargetPath = path;
+            const isDeleted = changeState === RepackerChangeState.Deleted;
+
+            if (window.chrome?.webview?.postMessage) {
+                window.chrome.webview.postMessage(
+                    JSON.stringify({
+                        type: HostWebMessageType.OpenTreeContextMenu,
+                        archiveId,
+                        path,
+                        changeState,
+                        isDeleted,
+                    })
+                );
+                return;
+            }
+
             const isArchiveRoot = !path;
             const menu = document.getElementById('treeContextMenu')!;
 
-            menu.querySelector('[data-ctx="addProp"]')?.classList.toggle('hidden', isArchiveRoot);
-            menu.querySelector('[data-ctx="copy"]')?.classList.toggle('hidden', isArchiveRoot);
-            menu.querySelector('[data-ctx="duplicate"]')?.classList.toggle('hidden', isArchiveRoot);
-            menu.querySelector('[data-ctx="rename"]')?.classList.toggle('hidden', isArchiveRoot);
+            menu.querySelector(`[data-ctx="${TreeContextMenuCommand.AddProp}"]`)?.classList.toggle('hidden', isArchiveRoot || isDeleted);
+            menu.querySelector(`[data-ctx="${TreeContextMenuCommand.Copy}"]`)?.classList.toggle('hidden', isArchiveRoot || isDeleted);
+            menu.querySelector(`[data-ctx="${TreeContextMenuCommand.Duplicate}"]`)?.classList.toggle('hidden', isArchiveRoot || isDeleted);
+            menu.querySelector(`[data-ctx="${TreeContextMenuCommand.Rename}"]`)?.classList.toggle('hidden', isArchiveRoot || isDeleted);
 
             const exportBtn = document.getElementById('ctxExportBtn');
             if (exportBtn) {
                 exportBtn.textContent = isArchiveRoot ? 'Export .wz Archive...' : 'Export Node...';
             }
 
-            document.getElementById('ctxDeleteBtn')?.classList.toggle('hidden', isArchiveRoot);
+            document.getElementById('ctxRestoreBtn')?.classList.toggle('hidden', isArchiveRoot || !isDeleted);
+            document.getElementById('ctxDeleteBtn')?.classList.toggle('hidden', isArchiveRoot || isDeleted);
             document.getElementById('ctxCloseArchiveBtn')?.classList.toggle('hidden', !isArchiveRoot);
 
             menu.classList.remove('hidden');
-            const maxX = window.innerWidth - 220;
-            const maxY = window.innerHeight - 310;
-            menu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
-            menu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+            const rect = menu.getBoundingClientRect();
+            const margin = 8;
+            const menuW = rect.width || 220;
+            const menuH = rect.height || 360;
+
+            let left = x;
+            if (left + menuW + margin > window.innerWidth) {
+                left = x - menuW >= margin ? x - menuW : window.innerWidth - menuW - margin;
+            }
+            left = Math.max(margin, left);
+
+            let top = y;
+            if (top + menuH + margin > window.innerHeight) {
+                top = y - menuH >= margin ? y - menuH : window.innerHeight - menuH - margin;
+            }
+            top = Math.max(margin, top);
+
+            menu.style.left = `${Math.round(left)}px`;
+            menu.style.top = `${Math.round(top)}px`;
         }
 
         private bindCanvasViewport(): void {
@@ -1749,10 +1933,12 @@ namespace MapleRepacker {
             // Background switchers
             document.querySelectorAll('[data-bg]').forEach((btn) => {
                 btn.addEventListener('click', () => {
-                    const bg = (btn as HTMLElement).dataset.bg || 'checker';
+                    const bg =
+                        ((btn as HTMLElement).dataset.bg as RepackerCanvasBackground) ||
+                        RepackerCanvasBackground.Checker;
                     document.querySelectorAll('[data-bg]').forEach((b) => b.classList.remove('active'));
                     btn.classList.add('active');
-                    viewport.className = `canvas-viewport bg-${bg}`;
+                    viewport.className = `canvas-viewport bg-${bg.toLowerCase()}`;
                     void rpcCall('ui.saveState', { uiState: { canvasBackground: bg } });
                 });
             });
@@ -1821,7 +2007,7 @@ namespace MapleRepacker {
             document.getElementById('btnAnimPlayPause')!.addEventListener('click', () => {
                 if (this.decodedFrames.length <= 1) return;
                 this.animPlaying = !this.animPlaying;
-                document.getElementById('btnAnimPlayPause')!.textContent = this.animPlaying ? 'Stop' : 'Play';
+                this.updateAnimPlayPauseButton();
                 if (this.animPlaying) {
                     this.scheduleNextAnimationFrame();
                 } else {
@@ -1835,7 +2021,7 @@ namespace MapleRepacker {
             document.getElementById('btnAnimPrev')!.addEventListener('click', () => {
                 if (this.decodedFrames.length === 0) return;
                 this.animPlaying = false;
-                document.getElementById('btnAnimPlayPause')!.textContent = 'Play';
+                this.updateAnimPlayPauseButton();
                 this.stopAnimationLoop();
                 this.activeFrameIdx = (this.activeFrameIdx - 1 + this.decodedFrames.length) % this.decodedFrames.length;
                 this.updateActiveFrameHighlight();
@@ -1845,7 +2031,7 @@ namespace MapleRepacker {
             document.getElementById('btnAnimNext')!.addEventListener('click', () => {
                 if (this.decodedFrames.length === 0) return;
                 this.animPlaying = false;
-                document.getElementById('btnAnimPlayPause')!.textContent = 'Play';
+                this.updateAnimPlayPauseButton();
                 this.stopAnimationLoop();
                 this.activeFrameIdx = (this.activeFrameIdx + 1) % this.decodedFrames.length;
                 this.updateActiveFrameHighlight();
@@ -1855,17 +2041,19 @@ namespace MapleRepacker {
             // Canvas format conversion & PNG import/export
             document.getElementById('btnConvertCanvasFormat')!.addEventListener('click', async () => {
                 if (!this.selectedArchiveId || !this.selectedPath) return;
-                const fmt = Number((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value) || 2;
+                const fmt =
+                    ((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value as WzCanvasFormat) ||
+                    WzCanvasFormat.Bgra8888;
                 const res = await rpcCall<RpcOperationResponse>('node.changeCanvasFormat', {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     format: fmt,
                 });
                 if (res.ok) {
-                    this.showToast(`Converted Canvas to Format ${fmt}`, 'success');
+                    this.showToast(`Converted Canvas to ${fmt}`, ToastKind.Success);
                     await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
                 } else {
-                    this.showToast(res.data?.error || 'Format conversion failed', 'error');
+                    this.showToast(res.data?.error || 'Format conversion failed', ToastKind.Error);
                 }
             });
 
@@ -1874,7 +2062,7 @@ namespace MapleRepacker {
             });
 
             document.getElementById('btnExportPng')!.addEventListener('click', () => {
-                void this.exportCurrentNode('png');
+                void this.exportCurrentNode(RepackerExportFormat.Png);
             });
 
             document.getElementById('btnInlineCurrentCanvas')!.addEventListener('click', () => {
@@ -1907,7 +2095,7 @@ namespace MapleRepacker {
                 (document.getElementById('hiddenAudioFileInput') as HTMLInputElement).click();
             });
             document.getElementById('btnExportAudio')!.addEventListener('click', () => {
-                void this.exportCurrentNode('audio');
+                void this.exportCurrentNode(RepackerExportFormat.Audio);
             });
 
             // String stage copy button
@@ -1918,15 +2106,52 @@ namespace MapleRepacker {
                 if (!target) return;
                 try {
                     await navigator.clipboard.writeText(target.text);
-                    this.showToast('Copied string to clipboard', 'success');
+                    this.showToast('Copied string to clipboard', ToastKind.Success);
                 } catch {
-                    this.showToast('Failed to copy string', 'error');
+                    this.showToast('Failed to copy string', ToastKind.Error);
                 }
             });
 
-            // Child nodes table minimize/expand toggle
+            // Child nodes table minimize/expand toggle & vertical resize splitter
             document.getElementById('btnToggleChildrenTable')!.addEventListener('click', () => {
                 this.toggleChildrenTableMinimized();
+            });
+
+            const childrenSplitter = document.getElementById('childrenTableSplitter')!;
+            childrenSplitter.addEventListener('mousedown', (ev: MouseEvent) => {
+                ev.preventDefault();
+                const stageContent = document.getElementById('stageContent');
+                const section = document.getElementById('childrenTableSection');
+                if (!stageContent || !section) return;
+
+                const startY = ev.clientY;
+                const startH = this.childrenTableMinimized
+                    ? 29
+                    : section.getBoundingClientRect().height || this.childrenTableHeight;
+                if (this.childrenTableMinimized) {
+                    this.childrenTableMinimized = false;
+                }
+
+                childrenSplitter.classList.add('dragging');
+                document.body.classList.add('resizing-row');
+
+                const onMove = (moveEv: MouseEvent) => {
+                    const delta = startY - moveEv.clientY;
+                    const maxH = Math.max(120, stageContent.clientHeight - 130);
+                    this.childrenTableHeight = Math.max(85, Math.min(maxH, startH + delta));
+                    this.applyChildrenTableMinimizedDom();
+                    this.drawActiveCanvasFrame();
+                };
+
+                const onUp = () => {
+                    childrenSplitter.classList.remove('dragging');
+                    document.body.classList.remove('resizing-row');
+                    window.removeEventListener('mousemove', onMove);
+                    window.removeEventListener('mouseup', onUp);
+                };
+
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
             });
         }
 
@@ -1954,7 +2179,7 @@ namespace MapleRepacker {
                     vecY,
                 });
                 if (res.ok) {
-                    this.showToast('Updated property value', 'success');
+                    this.showToast('Updated property value', ToastKind.Success);
                     const parentPath = this.selectedPath.includes('/')
                         ? this.selectedPath.slice(0, this.selectedPath.lastIndexOf('/'))
                         : '';
@@ -1962,31 +2187,48 @@ namespace MapleRepacker {
                     this.renderTree();
                     await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to update value', 'error');
+                    this.showToast(res.data?.error || 'Failed to update value', ToastKind.Error);
                 }
             });
 
             document.getElementById('btnRenameNode')!.addEventListener('click', () => this.openRenameModal());
-            document.getElementById('btnDeleteNode')!.addEventListener('click', () => void this.deleteSelectedNode());
+            document.getElementById('btnDeleteNode')!.addEventListener('click', () => {
+                if (this.currentInspection?.changeState === RepackerChangeState.Deleted) {
+                    void this.restoreSelectedNode();
+                } else {
+                    void this.deleteSelectedNode();
+                }
+            });
+            document.getElementById('btnToggleInspectorCollapse')!.addEventListener('click', () => {
+                this.layout.toggleInspector();
+                this.drawActiveCanvasFrame();
+            });
+            document.getElementById('inspectorCollapsedStrip')!.addEventListener('click', () => {
+                this.layout.toggleInspector(false);
+                this.drawActiveCanvasFrame();
+            });
             document.getElementById('btnInspAddChild')!.addEventListener('click', () => this.openAddPropertyModal());
             document.getElementById('btnInspDuplicate')!.addEventListener('click', () => void this.duplicateSelectedNode());
             document.getElementById('btnInspCopy')!.addEventListener('click', () => void this.copySelectedNode());
             document.getElementById('btnInspPaste')!.addEventListener('click', () => void this.pasteIntoSelectedNode());
-            document.getElementById('btnInspExportJson')!.addEventListener('click', () => void this.exportCurrentNode('json'));
-            document.getElementById('btnInspExportAuto')!.addEventListener('click', () => void this.exportCurrentNode('auto'));
+            document.getElementById('btnInspExportJson')!.addEventListener('click', () => void this.exportCurrentNode(RepackerExportFormat.Json));
+            document.getElementById('btnInspExportAuto')!.addEventListener('click', () => void this.exportCurrentNode(RepackerExportFormat.Auto));
         }
 
         private bindWorkbenchEvents(): void {
             const tabs = document.querySelectorAll('#workbenchTabs .wb-tab');
             tabs.forEach((tab) => {
                 tab.addEventListener('click', () => {
-                    const tabId = (tab as HTMLElement).dataset.tab || 'json';
+                    const tabId =
+                        ((tab as HTMLElement).dataset.tab as RepackerWorkbenchTab) ||
+                        RepackerWorkbenchTab.Json;
                     this.activateWorkbenchTab(tabId);
                 });
             });
 
             document.getElementById('btnToggleWorkbenchCollapse')!.addEventListener('click', () => {
                 this.layout.toggleWorkbench();
+                this.drawActiveCanvasFrame();
             });
 
             // JSON Editor Actions
@@ -1997,7 +2239,7 @@ namespace MapleRepacker {
                     const parsed = JSON.parse(this.jsonEditor.getValue());
                     this.jsonEditor.setValue(JSON.stringify(parsed, null, 2));
                 } catch (err) {
-                    this.showToast(`JSON Syntax Error: ${(err as Error).message}`, 'error');
+                    this.showToast(`JSON Syntax Error: ${(err as Error).message}`, ToastKind.Error);
                 }
             });
             document.getElementById('btnResetJson')!.addEventListener('click', () => {
@@ -2054,9 +2296,11 @@ namespace MapleRepacker {
             // Batch Tools
             document.getElementById('btnRunBatchExport')!.addEventListener('click', async () => {
                 const outDir = (document.getElementById('batchOutputDirInput') as HTMLInputElement).value.trim();
-                const mode = (document.getElementById('batchExportModeSelect') as HTMLSelectElement).value;
+                const mode =
+                    ((document.getElementById('batchExportModeSelect') as HTMLSelectElement).value as RepackerBatchExportMode) ||
+                    RepackerBatchExportMode.Png;
                 if (!outDir) {
-                    this.showToast('Enter a target output directory path', 'error');
+                    this.showToast('Enter a target output directory path', ToastKind.Error);
                     return;
                 }
                 const res = await rpcCall<RpcOperationResponse>('node.batchExport', {
@@ -2066,9 +2310,9 @@ namespace MapleRepacker {
                     mode,
                 });
                 if (res.ok) {
-                    this.showToast(`Batch-exported ${res.data.count ?? 0} file(s) to ${outDir}`, 'success');
+                    this.showToast(`Batch-exported ${res.data.count ?? 0} file(s) to ${outDir}`, ToastKind.Success);
                 } else {
-                    this.showToast(res.data?.error || 'Batch export failed', 'error');
+                    this.showToast(res.data?.error || 'Batch export failed', ToastKind.Error);
                 }
             });
 
@@ -2085,33 +2329,34 @@ namespace MapleRepacker {
             });
         }
 
-        private activateWorkbenchTab(tabId: string): void {
-            if (this.layout.isWorkbenchCollapsed()) {
+        private activateWorkbenchTab(tabId: RepackerWorkbenchTab, expandIfCollapsed = true): void {
+            if (expandIfCollapsed && this.layout.isWorkbenchCollapsed()) {
                 this.layout.toggleWorkbench(false);
             }
             document.querySelectorAll('#workbenchTabs .wb-tab').forEach((btn) => {
                 btn.classList.toggle('active', (btn as HTMLElement).dataset.tab === tabId);
             });
 
-            const panelMap: Record<string, string> = {
-                json: 'wbPanelJson',
-                search: 'wbPanelSearch',
-                hex: 'wbPanelHex',
-                batch: 'wbPanelBatch',
-                logs: 'wbPanelLogs',
+            const panelMap: Record<RepackerWorkbenchTab, string> = {
+                [RepackerWorkbenchTab.Json]: 'wbPanelJson',
+                [RepackerWorkbenchTab.Search]: 'wbPanelSearch',
+                [RepackerWorkbenchTab.Hex]: 'wbPanelHex',
+                [RepackerWorkbenchTab.Batch]: 'wbPanelBatch',
+                [RepackerWorkbenchTab.Logs]: 'wbPanelLogs',
             };
             Object.entries(panelMap).forEach(([k, id]) => {
                 document.getElementById(id)?.classList.toggle('active', k === tabId);
             });
 
-            document.getElementById('wbJsonActions')!.classList.toggle('hidden', tabId !== 'json');
-            if (tabId === 'json' && this.jsonEditor) {
+            document.getElementById('wbJsonActions')!.classList.toggle('hidden', tabId !== RepackerWorkbenchTab.Json);
+            if (tabId === RepackerWorkbenchTab.Json && this.jsonEditor) {
                 this.jsonEditor.refresh();
             }
+            void rpcCall('ui.saveState', { uiState: { activeWorkbenchTab: tabId } });
         }
 
         private focusGlobalSearch(): void {
-            this.activateWorkbenchTab('search');
+            this.activateWorkbenchTab(RepackerWorkbenchTab.Search);
             const input = document.getElementById('searchQueryInput') as HTMLInputElement;
             input.focus();
             input.select();
@@ -2191,11 +2436,11 @@ namespace MapleRepacker {
                 jsonText,
             });
             if (res.ok) {
-                this.showToast('Applied JSON changes to node', 'success');
+                this.showToast('Applied JSON changes to node', ToastKind.Success);
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
-                this.showToast(res.data?.error || 'Failed to apply JSON', 'error');
+                this.showToast(res.data?.error || 'Failed to apply JSON', ToastKind.Error);
             }
         }
 
@@ -2206,11 +2451,11 @@ namespace MapleRepacker {
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast('Undid last change in image', 'info');
+                this.showToast('Undid last change in image', ToastKind.Info);
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
-                this.showToast(res.data?.error || 'Nothing to undo', 'error');
+                this.showToast(res.data?.error || 'Nothing to undo', ToastKind.Error);
             }
         }
 
@@ -2221,11 +2466,11 @@ namespace MapleRepacker {
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast('Redid change in image', 'info');
+                this.showToast('Redid change in image', ToastKind.Info);
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, this.selectedPath);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
-                this.showToast(res.data?.error || 'Nothing to redo', 'error');
+                this.showToast(res.data?.error || 'Nothing to redo', ToastKind.Error);
             }
         }
 
@@ -2236,9 +2481,9 @@ namespace MapleRepacker {
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast(`Copied "${this.selectedPath}"`, 'info');
+                this.showToast(`Copied "${this.selectedPath}"`, ToastKind.Info);
             } else {
-                this.showToast(res.data?.error || 'Copy failed', 'error');
+                this.showToast(res.data?.error || 'Copy failed', ToastKind.Error);
             }
         }
 
@@ -2249,11 +2494,11 @@ namespace MapleRepacker {
                 targetPath: this.selectedPath,
             });
             if (res.ok && res.data.path) {
-                this.showToast(`Pasted "${res.data.path}"`, 'success');
+                this.showToast(`Pasted "${res.data.path}"`, ToastKind.Success);
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                 await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
             } else {
-                this.showToast(res.data?.error || 'Paste failed', 'error');
+                this.showToast(res.data?.error || 'Paste failed', ToastKind.Error);
             }
         }
 
@@ -2264,11 +2509,11 @@ namespace MapleRepacker {
                 path: this.selectedPath,
             });
             if (res.ok && res.data.path) {
-                this.showToast(`Duplicated -> "${res.data.path}"`, 'success');
+                this.showToast(`Duplicated -> "${res.data.path}"`, ToastKind.Success);
                 await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                 await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
             } else {
-                this.showToast(res.data?.error || 'Duplicate failed', 'error');
+                this.showToast(res.data?.error || 'Duplicate failed', ToastKind.Error);
             }
         }
 
@@ -2278,18 +2523,39 @@ namespace MapleRepacker {
                 await this.requestCloseArchive(this.selectedArchiveId);
                 return;
             }
+            const targetPath = this.selectedPath;
             const res = await rpcCall<RpcOperationResponse>('node.delete', {
                 archiveId: this.selectedArchiveId,
-                path: this.selectedPath,
+                path: targetPath,
             });
             if (res.ok) {
                 const parentPath = res.data.path ?? '';
-                this.showToast('Deleted node', 'info');
+                this.showToast('Deleted node', ToastKind.Info);
                 this.treeState.childrenByParent.delete(this.makeCacheKey(this.selectedArchiveId, parentPath));
-                await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, parentPath);
-                await this.selectAndInspectNode(this.selectedArchiveId, parentPath, false);
+                await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, targetPath);
+                const stillInTree = (this.treeState.childrenByParent.get(this.makeCacheKey(this.selectedArchiveId, parentPath)) || []).some(
+                    (n) => n.path === targetPath
+                );
+                await this.selectAndInspectNode(this.selectedArchiveId, stillInTree ? targetPath : parentPath, false);
             } else {
-                this.showToast(res.data?.error || 'Delete failed', 'error');
+                this.showToast(res.data?.error || 'Delete failed', ToastKind.Error);
+            }
+        }
+
+        private async restoreSelectedNode(): Promise<void> {
+            if (!this.selectedArchiveId || !this.selectedPath) return;
+            const targetPath = this.selectedPath;
+            const res = await rpcCall<RpcOperationResponse>('node.restore', {
+                archiveId: this.selectedArchiveId,
+                path: targetPath,
+            });
+            if (res.ok) {
+                const restoredPath = res.data.path || targetPath;
+                this.showToast(`Restored "${restoredPath}"`, ToastKind.Success);
+                await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, restoredPath);
+                await this.selectAndInspectNode(this.selectedArchiveId, restoredPath, false);
+            } else {
+                this.showToast(res.data?.error || 'Restore failed', ToastKind.Error);
             }
         }
 
@@ -2300,14 +2566,14 @@ namespace MapleRepacker {
                 path: this.selectedPath,
             });
             if (res.ok) {
-                this.showToast(`Inlined ${res.data.count ?? 0} linked sprite(s)`, 'success');
+                this.showToast(`Inlined ${res.data.count ?? 0} linked sprite(s)`, ToastKind.Success);
                 await this.selectAndInspectNode(this.selectedArchiveId, this.selectedPath, false);
             } else {
-                this.showToast(res.data?.error || 'Inlining failed', 'error');
+                this.showToast(res.data?.error || 'Inlining failed', ToastKind.Error);
             }
         }
 
-        private async exportCurrentNode(format: string): Promise<void> {
+        private async exportCurrentNode(format: RepackerExportFormat): Promise<void> {
             if (!this.selectedArchiveId) return;
             const url = `/api/export?archiveId=${encodeURIComponent(this.selectedArchiveId)}&path=${encodeURIComponent(this.selectedPath)}&format=${encodeURIComponent(format)}`;
             const a = document.createElement('a');
@@ -2329,7 +2595,7 @@ namespace MapleRepacker {
                 version,
             });
             if (!res.ok || !res.data?.data) {
-                this.showToast(res.data?.error || 'Failed to export WZ archive', 'error');
+                this.showToast(res.data?.error || 'Failed to export WZ archive', ToastKind.Error);
                 return false;
             }
             const bytes = toUint8Array(res.data.data);
@@ -2356,7 +2622,10 @@ namespace MapleRepacker {
             const ar = this.archives.find((a) => a.archiveId === archiveId);
             if (!ar) return;
 
-            if (!ar.isModified && !ar.isAdded) {
+            if (
+                ar.changeState !== RepackerChangeState.Modified &&
+                ar.changeState !== RepackerChangeState.Added
+            ) {
                 await this.performCloseArchive(ar.archiveId);
                 return;
             }
@@ -2381,14 +2650,54 @@ namespace MapleRepacker {
                         this.treeState.expandedKeys.delete(key);
                     }
                 }
-                this.showToast(`Closed "${arName}"`, 'info');
+                this.showToast(`Closed "${arName}"`, ToastKind.Info);
                 this.currentInspection = null;
                 if (res.data?.status) {
                     await this.handleWorkspaceStatus(res.data.status);
                 }
             } else {
-                this.showToast(res.data?.error || 'Failed to close archive', 'error');
+                this.showToast(res.data?.error || 'Failed to close archive', ToastKind.Error);
             }
+        }
+
+        private getDirtyArchives(): ArchiveSummaryDto[] {
+            return this.archives.filter(
+                (a) =>
+                    a.changeState === RepackerChangeState.Modified ||
+                    a.changeState === RepackerChangeState.Added
+            );
+        }
+
+        private async saveOrExportSingleArchive(ar: ArchiveSummaryDto): Promise<boolean> {
+            let targetFilePath = (ar.filePath || '').trim();
+            if (!targetFilePath && this.supportsNativeDialogs) {
+                const browseRes = await rpcCall<RpcOperationResponse>('workspace.browseSaveFile', {
+                    defaultFileName: ar.name,
+                });
+                if (browseRes.data?.cancelled || !browseRes.ok || !browseRes.data?.path) {
+                    return false;
+                }
+                targetFilePath = browseRes.data.path;
+            }
+
+            if (targetFilePath) {
+                const saveRes = await rpcCall<RpcOperationResponse>('workspace.saveArchive', {
+                    archiveId: ar.archiveId,
+                    targetFilePath,
+                    version: ar.version,
+                });
+                if (!saveRes.ok) {
+                    this.showToast(saveRes.data?.error || `Failed to save ${ar.name}`, ToastKind.Error);
+                    return false;
+                }
+                this.showToast(`Saved ${ar.name}`, ToastKind.Success);
+                if (saveRes.data?.status) {
+                    await this.handleWorkspaceStatus(saveRes.data.status);
+                }
+                return true;
+            }
+
+            return this.exportAndDownloadArchiveById(ar.archiveId, ar.version);
         }
 
         private openCloseArchivePromptModal(ar: ArchiveSummaryDto): void {
@@ -2396,19 +2705,22 @@ namespace MapleRepacker {
                 ar.modifiedImageCount > 0
                     ? ` (${ar.modifiedImageCount} modified image${ar.modifiedImageCount === 1 ? '' : 's'})`
                     : '';
+            const canSaveDisk = Boolean(ar.filePath) || this.supportsNativeDialogs;
+            const saveLabel = canSaveDisk ? 'Save &amp; Close' : 'Export .wz &amp; Close';
+            const discardLabel = canSaveDisk ? 'Close Without Saving' : 'Close Without Exporting';
 
             this.showModal(
                 `Unsaved Changes in "${ar.name}"`,
                 `
                 <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
                     <strong>${this.escapeHtml(ar.name)}</strong> has unsaved changes${modText}.
-                    Would you like to export the repacked <code>.wz</code> archive before closing?
+                    Do you want to save your changes before closing this archive?
                 </p>
                 `,
                 `
                 <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
-                <button type="button" class="cmd-btn danger" id="btnModalDiscardClose">Close Without Exporting</button>
-                <button type="button" class="cmd-btn primary" id="btnModalExportClose">Export .wz &amp; Close</button>
+                <button type="button" class="cmd-btn danger" id="btnModalDiscardClose">${discardLabel}</button>
+                <button type="button" class="cmd-btn primary" id="btnModalExportClose">${saveLabel}</button>
                 `
             );
 
@@ -2418,11 +2730,101 @@ namespace MapleRepacker {
                 await this.performCloseArchive(ar.archiveId);
             });
             document.getElementById('btnModalExportClose')!.addEventListener('click', async () => {
-                const exported = await this.exportAndDownloadArchiveById(ar.archiveId, ar.version);
-                if (exported) {
+                const saved = await this.saveOrExportSingleArchive(ar);
+                if (saved) {
                     this.closeModal();
                     await this.performCloseArchive(ar.archiveId);
                 }
+            });
+        }
+
+        private confirmHostAppClose(): void {
+            if (window.chrome?.webview?.postMessage) {
+                window.chrome.webview.postMessage(JSON.stringify({ type: HostWebMessageType.ConfirmAppClose }));
+            }
+        }
+
+        private handleAppCloseRequest(): void {
+            const dirtyArchives = this.getDirtyArchives();
+            if (dirtyArchives.length === 0) {
+                this.confirmHostAppClose();
+                return;
+            }
+            this.openAppClosePromptModal(dirtyArchives);
+        }
+
+        private openAppClosePromptModal(dirtyArchives: ArchiveSummaryDto[]): void {
+            let bodyHtml = '';
+            if (dirtyArchives.length === 1) {
+                const ar = dirtyArchives[0];
+                const modText =
+                    ar.modifiedImageCount > 0
+                        ? ` (${ar.modifiedImageCount} modified image${ar.modifiedImageCount === 1 ? '' : 's'})`
+                        : '';
+                bodyHtml = `
+                    <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
+                        <strong>${this.escapeHtml(ar.name)}</strong> has unsaved changes${modText}.
+                        Do you want to save your changes before closing?
+                    </p>
+                `;
+            } else {
+                const itemsHtml = dirtyArchives
+                    .map((ar) => {
+                        const modText =
+                            ar.modifiedImageCount > 0
+                                ? `${ar.modifiedImageCount} modified image${ar.modifiedImageCount === 1 ? '' : 's'}`
+                                : ar.changeState === RepackerChangeState.Added
+                                  ? 'New archive'
+                                  : 'Modified';
+                        return `<li style="margin: 4px 0;"><strong>${this.escapeHtml(ar.name)}</strong> <span style="color: var(--text-muted);">(${this.escapeHtml(modText)})</span></li>`;
+                    })
+                    .join('');
+                bodyHtml = `
+                    <p style="margin: 0 0 8px; color: var(--text-primary); line-height: 1.5;">
+                        The following <strong>${dirtyArchives.length}</strong> archives have unsaved changes:
+                    </p>
+                    <ul style="margin: 0 0 10px; padding-left: 20px; color: var(--text-primary); font-size: 12.5px;">
+                        ${itemsHtml}
+                    </ul>
+                    <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
+                        Do you want to save your changes before closing?
+                    </p>
+                `;
+            }
+
+            const saveBtnText = dirtyArchives.length > 1 ? 'Save All &amp; Close' : 'Save &amp; Close';
+            this.showModal(
+                'Unsaved Changes',
+                bodyHtml,
+                `
+                <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
+                <button type="button" class="cmd-btn danger" id="btnModalDiscardAppClose">Close Without Saving</button>
+                <button type="button" class="cmd-btn primary" id="btnModalSaveAppClose">${saveBtnText}</button>
+                `
+            );
+
+            document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
+            document.getElementById('btnModalDiscardAppClose')!.addEventListener('click', () => {
+                this.closeModal();
+                this.confirmHostAppClose();
+            });
+            document.getElementById('btnModalSaveAppClose')!.addEventListener('click', async () => {
+                const saveBtn = document.getElementById('btnModalSaveAppClose') as HTMLButtonElement | null;
+                const discardBtn = document.getElementById('btnModalDiscardAppClose') as HTMLButtonElement | null;
+                if (saveBtn) saveBtn.disabled = true;
+                if (discardBtn) discardBtn.disabled = true;
+
+                for (const ar of dirtyArchives) {
+                    const saved = await this.saveOrExportSingleArchive(ar);
+                    if (!saved) {
+                        if (saveBtn) saveBtn.disabled = false;
+                        if (discardBtn) discardBtn.disabled = false;
+                        return;
+                    }
+                }
+
+                this.closeModal();
+                this.confirmHostAppClose();
             });
         }
 
@@ -2573,7 +2975,9 @@ namespace MapleRepacker {
                     ? `<strong>${this.escapeHtml(existing.name)}</strong> is already open in the workspace.`
                     : `<strong>${this.escapeHtml(reqBase)}</strong> is already open in the workspace (linked with <strong>${this.escapeHtml(existing.name)}</strong>).`;
 
-                const hasUnsaved = Boolean(existing.isModified || existing.isAdded);
+                const hasUnsaved =
+                    existing.changeState === RepackerChangeState.Modified ||
+                    existing.changeState === RepackerChangeState.Added;
                 const unsavedNote = hasUnsaved
                     ? `<p style="margin: 8px 0 0; color: var(--amber); font-size: 12px;">Warning: This archive has unsaved changes that will be discarded if you reload it.</p>`
                     : '';
@@ -2613,7 +3017,7 @@ namespace MapleRepacker {
                 return;
             }
             if (!res.ok) {
-                this.showToast(res.data?.error || 'Could not browse files', 'error');
+                this.showToast(res.data?.error || 'Could not browse files', ToastKind.Error);
                 return;
             }
 
@@ -2642,7 +3046,7 @@ namespace MapleRepacker {
                     openedNames.push(name);
                     await this.fetchTreeChildren(openRes.data.archiveId, '');
                 } else {
-                    this.showToast(openRes.data?.error || `Could not open ${filePath}`, 'error');
+                    this.showToast(openRes.data?.error || `Could not open ${filePath}`, ToastKind.Error);
                 }
             }
 
@@ -2651,7 +3055,7 @@ namespace MapleRepacker {
                     openedNames.length === 1
                         ? openedNames[0]
                         : `${openedNames.length} WZ archives`;
-                this.showToast(`Opened ${label}`, 'success');
+                this.showToast(`Opened ${label}`, ToastKind.Success);
                 await this.selectAndInspectNode(lastArchiveId, '', true);
             }
         }
@@ -2672,13 +3076,13 @@ namespace MapleRepacker {
             if (res.ok) {
                 this.treeState.childrenByParent.clear();
                 const count = res.data.archives?.length ?? 0;
-                this.showToast(`Loaded ${count} WZ archive${count === 1 ? '' : 's'}`, 'success');
+                this.showToast(`Loaded ${count} WZ archive${count === 1 ? '' : 's'}`, ToastKind.Success);
                 if (res.data.archiveId) {
                     await this.fetchTreeChildren(res.data.archiveId, '');
                     await this.selectAndInspectNode(res.data.archiveId, '', true);
                 }
             } else {
-                this.showToast(res.data?.error || 'Failed to open directory', 'error');
+                this.showToast(res.data?.error || 'Failed to open directory', ToastKind.Error);
             }
         }
 
@@ -2705,13 +3109,13 @@ namespace MapleRepacker {
                 if (res.ok) {
                     this.closeModal();
                     this.treeState.childrenByParent.clear();
-                    this.showToast(`Loaded WZ archives from ${directoryPath}`, 'success');
+                    this.showToast(`Loaded WZ archives from ${directoryPath}`, ToastKind.Success);
                     if (res.data.archiveId) {
                         await this.fetchTreeChildren(res.data.archiveId, '');
                         await this.selectAndInspectNode(res.data.archiveId, '', true);
                     }
                 } else {
-                    this.showToast(res.data?.error || 'Failed to open directory', 'error');
+                    this.showToast(res.data?.error || 'Failed to open directory', ToastKind.Error);
                 }
             });
         }
@@ -2742,7 +3146,7 @@ namespace MapleRepacker {
                 const res = await rpcCall<RpcOperationResponse>('workspace.createArchive', { name, version });
                 if (res.ok && res.data.archiveId) {
                     this.closeModal();
-                    this.showToast(`Created archive ${name}`, 'success');
+                    this.showToast(`Created archive ${name}`, ToastKind.Success);
                     await this.fetchTreeChildren(res.data.archiveId, '');
                     await this.selectAndInspectNode(res.data.archiveId, '', true);
                 }
@@ -2787,9 +3191,9 @@ namespace MapleRepacker {
                 });
                 if (res.ok) {
                     this.closeModal();
-                    this.showToast(`Repacked and saved ${currentAr.name}`, 'success');
+                    this.showToast(`Repacked and saved ${currentAr.name}`, ToastKind.Success);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to save archive to disk', 'error');
+                    this.showToast(res.data?.error || 'Failed to save archive to disk', ToastKind.Error);
                 }
             });
         }
@@ -2843,11 +3247,17 @@ namespace MapleRepacker {
 
             const kindSel = document.getElementById('modalPropKind') as HTMLSelectElement;
             kindSel.addEventListener('change', () => {
-                const k = kindSel.value;
-                document.getElementById('modalVectorRow')!.classList.toggle('hidden', k !== 'Vector' && k !== 'Canvas');
+                const k = kindSel.value as RepackerPropertyKind;
+                document
+                    .getElementById('modalVectorRow')!
+                    .classList.toggle('hidden', k !== RepackerPropertyKind.Vector && k !== RepackerPropertyKind.Canvas);
                 document.getElementById('modalScalarRow')!.classList.toggle(
                     'hidden',
-                    k === 'Vector' || k === 'Object' || k === 'Canvas' || k === 'Sound' || k === 'Null'
+                    k === RepackerPropertyKind.Vector ||
+                        k === RepackerPropertyKind.Object ||
+                        k === RepackerPropertyKind.Canvas ||
+                        k === RepackerPropertyKind.Sound ||
+                        k === RepackerPropertyKind.Null
                 );
             });
 
@@ -2870,11 +3280,11 @@ namespace MapleRepacker {
                 });
                 if (res.ok && res.data.path) {
                     this.closeModal();
-                    this.showToast(`Added ${kind} "${name}"`, 'success');
+                    this.showToast(`Added ${kind} "${name}"`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                     await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to add property', 'error');
+                    this.showToast(res.data?.error || 'Failed to add property', ToastKind.Error);
                 }
             });
         }
@@ -2905,11 +3315,11 @@ namespace MapleRepacker {
                 });
                 if (res.ok && res.data.path) {
                     this.closeModal();
-                    this.showToast(`Created image "${res.data.path}"`, 'success');
+                    this.showToast(`Created image "${res.data.path}"`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                     await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to add image', 'error');
+                    this.showToast(res.data?.error || 'Failed to add image', ToastKind.Error);
                 }
             });
         }
@@ -2940,11 +3350,11 @@ namespace MapleRepacker {
                 });
                 if (res.ok && res.data.path) {
                     this.closeModal();
-                    this.showToast(`Created directory "${res.data.path}"`, 'success');
+                    this.showToast(`Created directory "${res.data.path}"`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                     await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
                 } else {
-                    this.showToast(res.data?.error || 'Failed to create directory', 'error');
+                    this.showToast(res.data?.error || 'Failed to create directory', ToastKind.Error);
                 }
             });
         }
@@ -2976,11 +3386,11 @@ namespace MapleRepacker {
                 if (res.ok) {
                     this.closeModal();
                     const newPath = res.data.path ?? '';
-                    this.showToast(`Renamed to "${newName}"`, 'success');
+                    this.showToast(`Renamed to "${newName}"`, ToastKind.Success);
                     this.treeState.childrenByParent.clear();
                     await this.selectAndInspectNode(this.selectedArchiveId, newPath, true);
                 } else {
-                    this.showToast(res.data?.error || 'Rename failed', 'error');
+                    this.showToast(res.data?.error || 'Rename failed', ToastKind.Error);
                 }
             });
         }
