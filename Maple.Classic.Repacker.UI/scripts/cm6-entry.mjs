@@ -70,57 +70,70 @@ const mapleDarkTheme = EditorView.theme(
     {
         '&': {
             color: '#d4d4d4',
-            backgroundColor: '#16181d',
+            backgroundColor: '#1e1e1e',
             height: '100%',
             fontSize: '12.5px',
-            fontFamily: '"JetBrains Mono", "Cascadia Mono", Consolas, monospace',
+            fontFamily: 'var(--font-mono, "Cascadia Code", "JetBrains Mono", Consolas, monospace)',
         },
         '.cm-content': {
-            caretColor: '#e5c07b',
+            caretColor: '#aeafad',
             padding: '8px 0',
         },
         '.cm-cursor, .cm-dropCursor': {
-            borderLeftColor: '#e5c07b',
+            borderLeftColor: '#aeafad',
+            borderLeftWidth: '2px',
         },
         '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, .cm-content ::selection': {
-            backgroundColor: '#264f78',
+            backgroundColor: '#264f78 !important',
         },
         '.cm-activeLine': {
             backgroundColor: 'rgba(255, 255, 255, 0.04)',
         },
         '.cm-selectionMatch': {
-            backgroundColor: 'rgba(229, 192, 123, 0.22)',
+            backgroundColor: 'rgba(55, 148, 255, 0.22)',
         },
         '.cm-gutters': {
-            backgroundColor: '#131519',
-            color: '#6b7280',
-            borderRight: '1px solid #262930',
+            backgroundColor: '#1e1e1e',
+            color: '#858585',
+            borderRight: '1px solid #2b2b2b',
         },
         '.cm-activeLineGutter': {
-            backgroundColor: '#1c1f26',
-            color: '#e5c07b',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+            color: '#c6c6c6',
+        },
+        '&.cm-focused .cm-matchingBracket': {
+            backgroundColor: 'rgba(0, 122, 204, 0.3)',
+            outline: '1px solid #007acc',
+            color: '#ffffff !important',
         },
         '.cm-foldPlaceholder': {
-            backgroundColor: '#252932',
-            border: '1px solid #3b4048',
-            color: '#d19a66',
+            backgroundColor: '#252526',
+            border: '1px solid #3c3c3c',
+            color: '#9cdcfe',
         },
         '.cm-tooltip': {
-            border: '1px solid #333842',
-            backgroundColor: '#1e222a',
-            color: '#d4d4d4',
+            border: '1px solid #454545',
+            backgroundColor: '#252526',
+            color: '#cccccc',
+            borderRadius: '5px',
+            boxShadow: '0 6px 20px rgba(0, 0, 0, 0.5)',
+        },
+        '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+            backgroundColor: '#04395e',
+            color: '#ffffff',
         },
     },
     { dark: true }
 );
 
 const mapleHighlightStyle = HighlightStyle.define([
-    { tag: tags.keyword, color: '#e06c75', fontWeight: '600' },
-    { tag: [tags.name, tags.deleted, tags.character, tags.propertyName, tags.macroName], color: '#61afef' },
-    { tag: [tags.string, tags.special(tags.string)], color: '#98c379' },
-    { tag: [tags.number, tags.integer, tags.float, tags.bool, tags.null], color: '#d19a66' },
-    { tag: [tags.comment], color: '#5c6370', fontStyle: 'italic' },
-    { tag: [tags.punctuation, tags.bracket, tags.brace], color: '#abb2bf' },
+    { tag: tags.keyword, color: '#c586c0', fontWeight: '600' },
+    { tag: [tags.name, tags.deleted, tags.character, tags.propertyName, tags.macroName, tags.variableName], color: '#9cdcfe' },
+    { tag: [tags.string, tags.special(tags.string)], color: '#ce9178' },
+    { tag: [tags.number, tags.integer, tags.float], color: '#b5cea8' },
+    { tag: [tags.bool, tags.null, tags.atom, tags.self], color: '#569cd6' },
+    { tag: [tags.comment], color: '#6a9955', fontStyle: 'italic' },
+    { tag: [tags.punctuation, tags.bracket, tags.brace, tags.operator], color: '#d4d4d4' },
 ]);
 
 function buildExtensions(onChangeCallback, onSaveCallback) {

@@ -105,7 +105,7 @@ public sealed class RepackerWorkspace : IDisposable {
     }
 
     // -------------------------------------------------------------------------
-    // Archive Lifecycle (Open, Create, Sample, Save, Close)
+    // Archive Lifecycle (Open, Create, Save, Close)
     // -------------------------------------------------------------------------
 
     public ArchiveSummaryDto OpenArchiveFromFile(string filePath, ushort? version = null) {
@@ -222,36 +222,6 @@ public sealed class RepackerWorkspace : IDisposable {
             NotifyStateChanged();
             return session.ToSummaryDto();
         }
-    }
-
-    public ArchiveSummaryDto[] LoadSampleWorkspace() {
-        List<(string Name, byte[] ArchiveBytes)> samples = SampleWorkspaceGenerator.BuildSampleArchives();
-        var loaded = new List<ArchiveSummaryDto>(samples.Count);
-
-        lock (syncLock) {
-            foreach (ArchiveSession old in archives) {
-                old.Dispose();
-            }
-            archives.Clear();
-
-            foreach ((string name, byte[] bytes) in samples) {
-                string stem = Path.GetFileNameWithoutExtension(name);
-                WzArchive wz = WzArchive.FromBytes(bytes, stem);
-                string id = $"wz_{nextArchiveSeq++}";
-                var session = new ArchiveSession(id, name, string.Empty, wz);
-                archives.Add(session);
-                loaded.Add(session.ToSummaryDto());
-            }
-
-            if (archives.Count > 0) {
-                SelectedArchiveId = archives[0].ArchiveId;
-                SelectedNodePath = "Coat/01040000.img/stand1";
-            }
-            AppendLogUnsafe($"Loaded MapleStory Classic sample workspace ({loaded.Count} archives).", RepackerLogLevel.Success);
-        }
-
-        NotifyStateChanged();
-        return [.. loaded];
     }
 
     public (bool Ok, string? Error, ArchiveSummaryDto? Summary) SaveArchiveToDisk(
@@ -804,9 +774,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
                     }
                 } else if (kind == RepackerPropertyKind.Sound) {
-                    newVal = binaryPayload is { Length: > 0 }
-                        ? WzSoundCodec.CreateFromAudioBytes(binaryPayload)
-                        : WzSoundCodec.CreateSynthesizedChimeSound();
+                    newVal = WzSoundCodec.CreateFromAudioBytes(binaryPayload is { Length: > 0 } ? binaryPayload : []);
                 } else {
                     newVal = CreatePrimitiveOrStructuredValue(kind, rawValue, vecX, vecY, null);
                 }

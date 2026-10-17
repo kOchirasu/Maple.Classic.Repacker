@@ -370,7 +370,7 @@ namespace MapleRepacker {
                 const empty = document.createElement('div');
                 empty.style.padding = '16px 12px';
                 empty.style.color = 'var(--text-muted)';
-                empty.textContent = 'No WZ archives open. Click "Open .wz" or "Sample" to begin.';
+                empty.textContent = 'No WZ archives open. Use the File menu (Ctrl+O) to open a .wz archive or data directory.';
                 container.appendChild(empty);
                 return;
             }
@@ -647,7 +647,7 @@ namespace MapleRepacker {
             metaBadges.innerHTML = `
                 <span class="meta-chip">${this.escapeHtml(dto.typeBadge)}</span>
                 <span class="meta-chip">${formatByteSize(dto.sizeBytes)}</span>
-                ${dto.isModified ? '<span class="meta-chip" style="color:var(--accent-gold)">MODIFIED</span>' : ''}
+                ${dto.isModified ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>' : ''}
             `;
         }
 
@@ -918,7 +918,7 @@ namespace MapleRepacker {
                     const boxW = (frame.rb.x - frame.lt.x) * this.zoomScale;
                     const boxH = (frame.rb.y - frame.lt.y) * this.zoomScale;
                     ctx.save();
-                    ctx.strokeStyle = '#61afef';
+                    ctx.strokeStyle = '#3794ff';
                     ctx.lineWidth = 1.5;
                     ctx.setLineDash([4, 3]);
                     ctx.strokeRect(boxX, boxY, boxW, boxH);
@@ -928,7 +928,7 @@ namespace MapleRepacker {
                     const hx = anchorX + frame.head.x * this.zoomScale;
                     const hy = anchorY + frame.head.y * this.zoomScale;
                     ctx.save();
-                    ctx.fillStyle = '#98c379';
+                    ctx.fillStyle = '#4cd964';
                     ctx.beginPath();
                     ctx.arc(hx, hy, 4, 0, Math.PI * 2);
                     ctx.fill();
@@ -939,7 +939,7 @@ namespace MapleRepacker {
             // Optional Origin Crosshair
             if (this.showOrigin) {
                 ctx.save();
-                ctx.strokeStyle = 'rgba(229, 192, 123, 0.85)';
+                ctx.strokeStyle = 'rgba(251, 191, 36, 0.85)';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
                 ctx.moveTo(anchorX - 14, anchorY + 0.5);
@@ -1017,7 +1017,7 @@ namespace MapleRepacker {
             const totalSamples = Math.floor(sampleBytes / 2);
             if (totalSamples <= 0) return;
 
-            ctx.strokeStyle = '#56b6c2';
+            ctx.strokeStyle = '#2dd4bf';
             ctx.lineWidth = 1.25;
             ctx.beginPath();
 
@@ -1288,17 +1288,9 @@ namespace MapleRepacker {
             });
 
             // Toolbar buttons
-            document.getElementById('btnOpenFile')!.addEventListener('click', () => this.openFileModal());
-            document.getElementById('btnOpenDir')!.addEventListener('click', () => this.openDirectoryModal());
-            document.getElementById('btnNewArchive')!.addEventListener('click', () => this.openNewArchiveModal());
-            document.getElementById('btnRepackSave')!.addEventListener('click', () => this.openSaveRepackModal());
-            document.getElementById('btnAddProp')!.addEventListener('click', () => this.openAddPropertyModal());
-            document.getElementById('btnAddImg')!.addEventListener('click', () => this.openAddImageModal());
-            document.getElementById('btnAddDir')!.addEventListener('click', () => this.openAddDirectoryModal());
             document.getElementById('btnUndo')!.addEventListener('click', () => void this.undoSelectedImage());
             document.getElementById('btnRedo')!.addEventListener('click', () => void this.redoSelectedImage());
             document.getElementById('btnInlineLinks')!.addEventListener('click', () => void this.inlineLinksInCurrentScope());
-            document.getElementById('btnSearchShortcut')!.addEventListener('click', () => this.focusGlobalSearch());
 
             // Hidden browser file input handlers
             const wzInput = document.getElementById('hiddenWzFileInput') as HTMLInputElement;
@@ -1381,9 +1373,6 @@ namespace MapleRepacker {
                     break;
                 case 'newArchiveModal':
                     this.openNewArchiveModal();
-                    break;
-                case 'loadSampleWorkspace':
-                    void this.reloadSampleWorkspace();
                     break;
                 case 'saveArchiveDisk':
                     this.openSaveRepackModal();
@@ -1470,7 +1459,6 @@ namespace MapleRepacker {
         }
 
         private bindTreeEvents(): void {
-            document.getElementById('btnLoadSamples')!.addEventListener('click', () => void this.reloadSampleWorkspace());
             document.getElementById('btnCollapseAll')!.addEventListener('click', () => {
                 this.treeState.expandedKeys.clear();
                 if (this.selectedArchiveId) {
@@ -1998,16 +1986,6 @@ namespace MapleRepacker {
         // ---------------------------------------------------------------------
         // Workspace & Node Operations
         // ---------------------------------------------------------------------
-
-        private async reloadSampleWorkspace(): Promise<void> {
-            this.treeState.childrenByParent.clear();
-            this.treeState.expandedKeys.clear();
-            const res = await rpcCall<RpcOperationResponse>('workspace.loadSample', {});
-            if (res.ok && res.data.archiveId) {
-                this.showToast('Loaded MapleStory Classic v779 sample workspace', 'success');
-                await this.selectAndInspectNode(res.data.archiveId, res.data.path || '', true);
-            }
-        }
 
         private async applyJsonFromEditor(): Promise<void> {
             if (!this.jsonEditor || !this.selectedArchiveId || !this.selectedPath) return;

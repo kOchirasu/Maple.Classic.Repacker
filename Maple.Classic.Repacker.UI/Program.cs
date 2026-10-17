@@ -32,34 +32,23 @@ public class Program {
         var workspace = new RepackerWorkspace();
         var settingsStore = new UserSettingsStore();
 
-        // Load any .wz files or directories passed on the command line (or sample workspace in Debug builds)
-        bool loadedFromArgs = false;
+        // Load any .wz files or directories passed on the command line
         foreach (string arg in args) {
             if (arg.StartsWith('-')) continue;
             try {
                 if (System.IO.File.Exists(arg) && arg.EndsWith(".wz", StringComparison.OrdinalIgnoreCase)) {
                     workspace.OpenArchiveFromFile(arg);
                     settingsStore.RecordRecentPath(Path.GetFullPath(arg));
-                    loadedFromArgs = true;
                 } else if (Directory.Exists(arg)) {
                     ArchiveSummaryDto[] opened = workspace.OpenDataDirectory(arg);
                     if (opened.Length > 0) {
                         settingsStore.RecordRecentPath(Path.GetFullPath(arg));
-                        loadedFromArgs = true;
                     }
                 }
             } catch (Exception ex) {
                 workspace.AppendLog($"Startup open failed for \"{arg}\": {ex.Message}", RepackerLogLevel.Warning);
             }
         }
-
-#if DEBUG
-        if (!loadedFromArgs) {
-            workspace.LoadSampleWorkspace();
-        }
-#else
-        _ = loadedFromArgs;
-#endif
 
         builder.Services.AddSingleton(workspace);
         builder.Services.AddSingleton(settingsStore);
@@ -258,16 +247,6 @@ public class Program {
             switch (method) {
                 case "workspace.status":
                     return (true, BuildStatusPayload(workspace, settingsStore));
-
-                case "workspace.loadSample": {
-                    ArchiveSummaryDto[] loaded = workspace.LoadSampleWorkspace();
-                    return (true, new RpcOperationResponse(
-                        Ok: true,
-                        ArchiveId: workspace.SelectedArchiveId,
-                        Path: workspace.SelectedNodePath,
-                        Archives: loaded,
-                        Status: BuildStatusPayload(workspace, settingsStore)));
-                }
 
                 case "workspace.openFile": {
                     OpenArchiveFileRequest req = RpcSerializer.DecodeParams<OpenArchiveFileRequest>(rawParams);

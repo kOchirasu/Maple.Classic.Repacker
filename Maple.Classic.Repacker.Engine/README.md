@@ -19,5 +19,3 @@ Core workspace, codec, and serialization library for inspecting, editing, conver
   - Parses `Sound_DX8` headers (`WAVEFORMATEX` / `MPEGLAYER3WAVEFORMAT`), wraps raw PCM streams in standard RIFF `WAVE` containers for playback, and builds `Sound_DX8` properties from `.mp3` and `.wav` files.
 - **`Serialization/JsonWzCodec.cs`**:
   - Deserializes JSON trees produced by `WzValue.ToJson()` back into `WzValue` hierarchies while preserving existing binary payloads (`Canvas`, `Sound`, `RawData`) and exact numeric types (`Short`, `Int`, `Long`, `Float`, `Double`).
-- **`Workspace/SampleWorkspaceGenerator.cs`**:
-  - Generates 5 self-contained MapleStory Classic (`v779`) sample archives (`Character_000.wz`, `Character_Canvas_000.wz`, `Mob_000.wz`, `String_000.wz`, `Sound_000.wz`) with animated pixel-art sprites, `_outlink` references, and synthesized PCM chimes.

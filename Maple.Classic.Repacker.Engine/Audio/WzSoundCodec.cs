@@ -137,35 +137,6 @@ public static class WzSoundCodec {
         return new WzValue.Sound(audioBytes.Length, Math.Max(1, duration), audioBytes.ToArray(), mp3Header);
     }
 
-    /// <summary>
-    /// Generates a clean 16-bit PCM WAV chime (used for sample workspace sounds).
-    /// </summary>
-    public static WzValue.Sound CreateSynthesizedChimeSound(int rootFreqHz = 523, int secondFreqHz = 659, int durationMs = 360) {
-        const int sampleRate = 22050;
-        const short channels = 1;
-        const short bitsPerSample = 16;
-        int numSamples = Math.Max(1, (sampleRate * durationMs) / 1000);
-        int pcmByteLen = numSamples * 2;
-        byte[] pcm = new byte[pcmByteLen];
-
-        int halfPoint = numSamples / 2;
-        for (int i = 0; i < numSamples; i++) {
-            double t = (double) i / sampleRate;
-            double freq = i < halfPoint ? rootFreqHz : secondFreqHz;
-            double localProgress = i < halfPoint
-                ? (double) i / halfPoint
-                : (double) (i - halfPoint) / Math.Max(1, numSamples - halfPoint);
-            double envelope = Math.Exp(-3.5 * localProgress) * Math.Min(1.0, localProgress * 25.0);
-            double sample = Math.Sin(2.0 * Math.PI * freq * t) * 0.65
-                + Math.Sin(4.0 * Math.PI * freq * t) * 0.2;
-            short val = (short) Math.Clamp(sample * envelope * 24000.0, short.MinValue, short.MaxValue);
-            BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i * 2, 2), val);
-        }
-
-        byte[] header = BuildDx8WaveHeader(1, (ushort) channels, sampleRate, sampleRate * 2, 2, (ushort) bitsPerSample);
-        return new WzValue.Sound(pcm.Length, durationMs, pcm, header);
-    }
-
     private static bool IsMp3Stream(ReadOnlySpan<byte> data) {
         if (data.Length < 4) return false;
         if (data[..3].SequenceEqual("ID3"u8)) return true;

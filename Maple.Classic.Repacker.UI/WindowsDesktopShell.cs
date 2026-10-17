@@ -96,21 +96,21 @@ internal sealed class RepackerDesktopForm : Form {
             WindowState = FormWindowState.Maximized;
         }
 
-        BackColor = Color.FromArgb(24, 26, 31);
+        BackColor = Color.FromArgb(30, 30, 30);
         ForeColor = Color.FromArgb(212, 212, 212);
 
         loadingLabel = new Label {
             Text = $"Starting Maple.Classic.Repacker ({backendUrl})...",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleCenter,
-            BackColor = Color.FromArgb(24, 26, 31),
+            BackColor = Color.FromArgb(30, 30, 30),
             ForeColor = Color.FromArgb(157, 157, 157),
             Font = new Font("Consolas", 11f, FontStyle.Regular),
         };
 
         webView = new WebView2 {
             Dock = DockStyle.Fill,
-            DefaultBackgroundColor = Color.FromArgb(255, 24, 26, 31),
+            DefaultBackgroundColor = Color.FromArgb(255, 30, 30, 30),
             Visible = false,
         };
 

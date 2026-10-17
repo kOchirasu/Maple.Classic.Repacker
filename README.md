@@ -7,7 +7,7 @@ MapleStory Classic World (`mscw`) `.wz` and `.img` repacker, sprite/animation st
 - **[`Maple.Classic.File`](Maple.Classic.File)** *(submodule)*: Core zero-copy `.wz` archive and `.img` property parser, reader, and writer (`Maple.Classic.File.IO`).
 - **[`Maple.Classic.Repacker.Engine`](Maple.Classic.Repacker.Engine)**: Thread-safe multi-archive workspace (`RepackerWorkspace`, `ArchiveSession`), WZ pixel format codecs (`WzCanvasCodec`, `PngCodec`), DirectSound8 audio codec (`WzSoundCodec`), and JSON subtree round-trip serializer (`JsonWzCodec`).
 - **[`Maple.Classic.Repacker.UI`](Maple.Classic.Repacker.UI)**: Desktop and web studio featuring a native Windows WebView2 shell (`WindowsDesktopShell`), cross-platform Electron wrapper (`electron/main.ts`), MessagePack WebSocket RPC server (`Program.cs`), and TypeScript + CodeMirror 6 frontend (`wwwroot/`).
-- **[`Maple.Classic.Repacker.Tests`](Maple.Classic.Repacker.Tests)**: xUnit test suite covering PNG and WZ canvas codecs across all 6 pixel formats, `Sound_DX8` audio extraction/synthesis, JSON round-tripping, cross-archive `_outlink` resolution and inlining, undo/redo, CRUD, search, and archive repacking.
+- **[`Maple.Classic.Repacker.Tests`](Maple.Classic.Repacker.Tests)**: xUnit test suite covering PNG and WZ canvas codecs across all 6 pixel formats, `Sound_DX8` audio extraction/import, JSON round-tripping, cross-archive `_outlink` resolution and inlining, undo/redo, CRUD, search, and archive repacking.
 
 ## Key Features
 

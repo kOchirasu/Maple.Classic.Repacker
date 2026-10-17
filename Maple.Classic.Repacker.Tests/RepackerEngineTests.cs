@@ -63,13 +63,28 @@ public sealed class RepackerEngineTests {
     }
 
     [Fact]
-    public void WzSoundCodec_SynthesizesAndExtracts_PlayableWav() {
-        WzValue.Sound sound = WzSoundCodec.CreateSynthesizedChimeSound(523, 659, 120);
+    public void WzSoundCodec_ImportsAndExtracts_PlayableWav() {
+        byte[] wav = new byte[44 + 4410];
+        "RIFF"u8.CopyTo(wav.AsSpan(0, 4));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(4, 4), wav.Length - 8);
+        "WAVE"u8.CopyTo(wav.AsSpan(8, 4));
+        "fmt "u8.CopyTo(wav.AsSpan(12, 4));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(16, 4), 16);
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(20, 2), 1); // PCM
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(22, 2), 1); // 1 channel
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(24, 4), 22050); // sampleRate
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(28, 4), 44100); // byteRate
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(32, 2), 2); // blockAlign
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(34, 2), 16); // bitsPerSample
+        "data"u8.CopyTo(wav.AsSpan(36, 4));
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(40, 4), 4410);
+
+        WzValue.Sound sound = WzSoundCodec.CreateFromAudioBytes(wav);
         ExtractedSoundData extracted = WzSoundCodec.ExtractAudioStream(sound);
 
         Assert.Equal("audio/wav", extracted.MimeType);
         Assert.Equal("wav", extracted.Extension);
-        Assert.Contains("PCM WAV", extracted.FormatName);
+        Assert.Contains("WAV", extracted.FormatName);
         Assert.Equal((byte) 'R', extracted.AudioBytes[0]);
         Assert.Equal((byte) 'I', extracted.AudioBytes[1]);
         Assert.Equal((byte) 'F', extracted.AudioBytes[2]);
@@ -105,10 +120,68 @@ public sealed class RepackerEngineTests {
     [Fact]
     public void RepackerWorkspace_SupportsFullInspectionCrudSearchAndRepack() {
         using var workspace = new RepackerWorkspace();
-        ArchiveSummaryDto[] loaded = workspace.LoadSampleWorkspace();
-        Assert.Equal(5, loaded.Length);
 
-        string charArchiveId = loaded.First(a => a.Name == "Character_000.wz").ArchiveId;
+        byte[] sprite36 = new byte[36 * 36 * 4];
+        Array.Fill(sprite36, (byte) 200);
+        byte[] encoded36 = WzCanvasCodec.EncodeFromRgba(36, 36, (int) WzCanvasFormat.Bgra8888, sprite36);
+        byte[] dummy1x1 = WzCanvasCodec.EncodeFromRgba(1, 1, (int) WzCanvasFormat.Bgra4444, [0, 0, 0, 0]);
+
+        byte[] charBytes;
+        using (var charWz = new WzArchive()) {
+            var coatImg = new WzValue.Object();
+            coatImg["info/islot"] = "Ma";
+            coatImg["info/reqLevel"] = new WzValue.Short(10);
+            for (int f = 0; f < 3; f++) {
+                coatImg[$"stand1/{f}/delay"] = 500;
+                coatImg[$"stand1/{f}/mail"] = new WzValue.Canvas(
+                    36,
+                    36,
+                    (int) WzCanvasFormat.Bgra8888,
+                    encoded36,
+                    [new WzProperty("origin", (18, 18))]);
+            }
+            charWz.SetImage("Coat/01040000.img", coatImg);
+
+            var petImg = new WzValue.Object();
+            petImg["5002828/stand0/0"] = new WzValue.Canvas(
+                1,
+                1,
+                (int) WzCanvasFormat.Bgra4444,
+                dummy1x1,
+                [
+                    new WzProperty("origin", (18, 32)),
+                    new WzProperty("_outlink", "Character/PetEquip/_Canvas/01802653.img/5002828/stand0/0"),
+                ]);
+            charWz.SetImage("PetEquip/01802653.img", petImg);
+            charBytes = charWz.ToBytes();
+        }
+
+        byte[] charCanvasBytes;
+        using (var canvasWz = new WzArchive()) {
+            var petCanvasImg = new WzValue.Object();
+            petCanvasImg["5002828/stand0/0"] = new WzValue.Canvas(
+                36,
+                36,
+                (int) WzCanvasFormat.Bgra8888,
+                encoded36,
+                [new WzProperty("origin", (18, 32))]);
+            canvasWz.SetImage("PetEquip/_Canvas/01802653.img", petCanvasImg);
+            charCanvasBytes = canvasWz.ToBytes();
+        }
+
+        byte[] stringBytes;
+        using (var strWz = new WzArchive()) {
+            var mobImg = new WzValue.Object();
+            mobImg["100100/name"] = "Snail";
+            strWz.SetImage("Mob.img", mobImg);
+            stringBytes = strWz.ToBytes();
+        }
+
+        ArchiveSummaryDto charSummary = workspace.OpenArchiveFromBytes("Character_000.wz", charBytes);
+        workspace.OpenArchiveFromBytes("Character_Canvas_000.wz", charCanvasBytes);
+        workspace.OpenArchiveFromBytes("String_000.wz", stringBytes);
+
+        string charArchiveId = charSummary.ArchiveId;
 
         // 1. Expand tree down to Coat/01040000.img/stand1/0/mail
         TreeNodeDto[] rootChildren = workspace.GetTreeChildren(charArchiveId, "");
@@ -205,8 +278,8 @@ public sealed class RepackerEngineTests {
         Assert.True(expOk, expErr);
         Assert.Equal("Character_000.wz", wzFileName);
         using WzArchive repacked = WzArchive.FromBytes(wzBytes, "Character_000");
-        WzValue coatImg = repacked.ParseImage("Coat/01040000.img");
-        Assert.NotNull(coatImg["info"]);
+        WzValue coatImgRepacked = repacked.ParseImage("Coat/01040000.img");
+        Assert.NotNull(coatImgRepacked["info"]);
     }
 
     [Fact]
