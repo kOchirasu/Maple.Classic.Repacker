@@ -105,7 +105,7 @@ public static class JsonWzCodec {
             ReadOnlyMemory<byte> payload = prevCanvas?.Payload ?? ReadOnlyMemory<byte>.Empty;
             if (payload.IsEmpty) {
                 byte[] blankRgba = new byte[Math.Max(1, width) * Math.Max(1, height) * 4];
-                payload = WzCanvasCodec.EncodeFromRgba(Math.Max(1, width), Math.Max(1, height), format, blankRgba);
+                payload = WzCanvasCodec.EncodeFromRgba(Math.Max(1, width), Math.Max(1, height), (WzCanvasFormat) format, blankRgba);
             }
 
             var children = new List<WzProperty>();

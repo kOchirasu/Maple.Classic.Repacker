@@ -9,6 +9,21 @@ namespace Maple.Classic.Repacker.Engine.Canvas;
 /// (<c>BGRA4444</c>, <c>BGRA8888</c>, <c>BGR565</c>, <c>Format517</c>, <c>DXT3</c>, <c>DXT5</c>) and PNG.
 /// </summary>
 public static class WzCanvasCodec {
+    /// <summary>Returns the decompressed raw pixel byte length for a Canvas of the given size and format.</summary>
+    public static int GetExpectedUncompressedLength(int width, int height, WzCanvasFormat format) {
+        if (width <= 0 || height <= 0) {
+            return 0;
+        }
+        return format switch {
+            WzCanvasFormat.Bgra4444 => width * height * 2,
+            WzCanvasFormat.Bgra8888 => width * height * 4,
+            WzCanvasFormat.Bgr565 => width * height * 2,
+            WzCanvasFormat.Bgr565Block16 => Math.Max(1, width >> 4) * Math.Max(1, height >> 4) * 2,
+            WzCanvasFormat.Dxt3 or WzCanvasFormat.Dxt5 => ((width + 3) / 4) * ((height + 3) / 4) * 16,
+            _ => width * height * 4,
+        };
+    }
+
     public static byte[] DecompressPayload(ReadOnlySpan<byte> payload, int expectedLength) {
         if (expectedLength <= 0) {
             return [];
@@ -72,15 +87,12 @@ public static class WzCanvasCodec {
         return PngCodec.EncodeRgba(w, h, rgba);
     }
 
-    public static byte[] DecodeToRgba(int width, int height, int format, ReadOnlySpan<byte> payload) =>
-        DecodeToRgba(width, height, (WzCanvasFormat) format, payload);
-
     public static byte[] DecodeToRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> payload) {
         if (width <= 0 || height <= 0) {
             return [];
         }
 
-        int expectedLen = WzCanvasFormatExtensions.GetExpectedUncompressedLength(width, height, format);
+        int expectedLen = GetExpectedUncompressedLength(width, height, format);
         byte[] raw = DecompressPayload(payload, expectedLen);
         byte[] rgba = new byte[width * height * 4];
 
@@ -117,9 +129,6 @@ public static class WzCanvasCodec {
         return rgba;
     }
 
-    public static byte[] EncodeFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) =>
-        EncodeFromRgba(width, height, (WzCanvasFormat) format, rgba);
-
     public static byte[] EncodeFromRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> rgba) {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(width, 0);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(height, 0);
@@ -139,9 +148,6 @@ public static class WzCanvasCodec {
         byte[] compressed = EncodeFromRgba(width, height, format, rgba);
         return (width, height, compressed);
     }
-
-    public static byte[] EncodeRawPixelsFromRgba(int width, int height, int format, ReadOnlySpan<byte> rgba) =>
-        EncodeRawPixelsFromRgba(width, height, (WzCanvasFormat) format, rgba);
 
     public static byte[] EncodeRawPixelsFromRgba(int width, int height, WzCanvasFormat format, ReadOnlySpan<byte> rgba) {
         int pixelCount = width * height;

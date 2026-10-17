@@ -494,7 +494,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             RepackerNodeKind.Directory,
                             RepackerPropertyKind.None,
                             $"{d + i} items",
-                            "DIR",
+                            RepackerNodeKind.Directory.GetShortName(),
                             child.Children.Count > 0,
                             child.Children.Count,
                             dirState,
@@ -509,7 +509,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             RepackerNodeKind.Image,
                             RepackerPropertyKind.Object,
                             FormatByteSize(sizeBytes),
-                            "IMG",
+                            RepackerNodeKind.Image.GetShortName(),
                             true,
                             0,
                             imgState,
@@ -591,7 +591,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 bool isRoot = string.IsNullOrEmpty(norm);
                 bool isDirDeleted = !isRoot && session.IsVirtualPathDeleted(norm);
                 RepackerNodeKind nodeKind = isRoot ? RepackerNodeKind.Archive : RepackerNodeKind.Directory;
-                string badge = isRoot ? "WZ" : "DIR";
+                string badge = nodeKind.GetShortName();
                 string displayName = isRoot ? session.Name : dirNode.Name;
                 (int dCount, int iCount) = ArchiveSession.CountVirtualRecursive(dirNode);
 
@@ -609,7 +609,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             cPath,
                             RepackerNodeKind.Directory,
                             RepackerPropertyKind.None,
-                            "DIR",
+                            RepackerNodeKind.Directory.GetShortName(),
                             $"{cd} dirs, {ci} images",
                             c.Children.Count,
                             0,
@@ -622,7 +622,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             cPath,
                             RepackerNodeKind.Image,
                             RepackerPropertyKind.Object,
-                            "IMG",
+                            RepackerNodeKind.Image.GetShortName(),
                             FormatByteSize(sz),
                             0,
                             sz,
@@ -704,7 +704,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 RepackerNodeKind nodeKind = isImageRoot ? RepackerNodeKind.Image : RepackerNodeKind.Property;
                 (RepackerPropertyKind propKind, string typeBadge, string displayValue) = DescribeWzValue(target);
                 if (isImageRoot) {
-                    typeBadge = "IMG";
+                    typeBadge = RepackerNodeKind.Image.GetShortName();
                 }
 
                 string? rawStr = target.AsString();
@@ -755,7 +755,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             f0.Width,
                             f0.Height,
                             f0.Format,
-                            WzCanvasFormatExtensions.GetDisplayName(f0.Format),
+                            f0.Format.GetDisplayName(),
                             f0.PngBytes.Length,
                             f0.PngBytes,
                             f0.Origin,
@@ -1572,7 +1572,10 @@ public sealed class RepackerWorkspace : IDisposable {
                     return (false, $"Property \"{subPath}\" is not a Canvas.");
                 }
 
-                WzCanvasFormat targetFormat = format ?? WzCanvasFormatExtensions.FromFormatCode(canvas.Format);
+                WzCanvasFormat targetFormat = format ?? (WzCanvasFormat) canvas.Format;
+                if (!Enum.IsDefined(targetFormat)) {
+                    targetFormat = WzCanvasFormat.Bgra8888;
+                }
                 (int width, int height, byte[] compressed) = WzCanvasCodec.EncodePngToCanvasPayload(pngBytes, targetFormat);
 
                 session.RecordUndoSnapshot(imgPath);

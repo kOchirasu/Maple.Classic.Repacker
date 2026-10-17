@@ -43,7 +43,7 @@ internal static class CanvasLinkResolver {
         }
 
         byte[] pngBytes = WzCanvasCodec.DecodeToPng(visualCanvas);
-        WzCanvasFormat canvasFormat = WzCanvasFormatExtensions.FromFormatCode(visualCanvas.Format);
+        WzCanvasFormat canvasFormat = (WzCanvasFormat) visualCanvas.Format;
         return new CanvasPreviewDto(
             visualCanvas.Width,
             visualCanvas.Height,

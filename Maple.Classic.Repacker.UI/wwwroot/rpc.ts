@@ -134,6 +134,44 @@ namespace MapleRepacker {
         ResetLayout = 'resetLayout',
     }
 
+    /** WebSocket RPC method names. Mirrors `RpcMethod` in Rpc/RpcMethod.cs. */
+    export enum RpcMethod {
+        WorkspaceBrowseFiles = 'workspace.browseFiles',
+        WorkspaceBrowseSaveFile = 'workspace.browseSaveFile',
+        WorkspaceBrowseDirectory = 'workspace.browseDirectory',
+        WorkspaceBrowseAndOpenDirectory = 'workspace.browseAndOpenDirectory',
+        WorkspaceOpenFile = 'workspace.openFile',
+        WorkspaceOpenBytes = 'workspace.openBytes',
+        WorkspaceOpenDirectory = 'workspace.openDirectory',
+        WorkspaceCreateArchive = 'workspace.createArchive',
+        WorkspaceSaveArchive = 'workspace.saveArchive',
+        WorkspaceExportArchive = 'workspace.exportArchive',
+        WorkspaceCloseArchive = 'workspace.closeArchive',
+        TreeChildren = 'tree.children',
+        NodeInspect = 'node.inspect',
+        NodeSetValue = 'node.setValue',
+        NodeAddProperty = 'node.addProperty',
+        NodeAddImage = 'node.addImage',
+        NodeAddDirectory = 'node.addDirectory',
+        NodeRename = 'node.rename',
+        NodeDelete = 'node.delete',
+        NodeRestore = 'node.restore',
+        NodeDuplicate = 'node.duplicate',
+        NodeCopy = 'node.copy',
+        NodePaste = 'node.paste',
+        NodeReplaceCanvas = 'node.replaceCanvas',
+        NodeChangeCanvasFormat = 'node.changeCanvasFormat',
+        NodeReplaceSound = 'node.replaceSound',
+        NodeApplyJson = 'node.applyJson',
+        NodeInlineOutlinks = 'node.inlineOutlinks',
+        NodeUndo = 'node.undo',
+        NodeRedo = 'node.redo',
+        NodeBatchExport = 'node.batchExport',
+        SearchQuery = 'search.query',
+        LogsClear = 'logs.clear',
+        UiSaveState = 'ui.saveState',
+    }
+
     export enum HostWebMessageType {
         OpenTreeContextMenu = 'openTreeContextMenu',
         CloseTreeContextMenu = 'closeTreeContextMenu',
@@ -526,7 +564,7 @@ namespace MapleRepacker {
     }
 
     export async function rpcCall<T = RpcOperationResponse>(
-        method: string,
+        method: RpcMethod,
         params?: Record<string, unknown> | unknown
     ): Promise<{ ok: boolean; data: T }> {
         const ws = await waitForOpenRpcSocket();

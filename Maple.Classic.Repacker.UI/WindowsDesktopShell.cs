@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Windows.Forms;
 using Maple.Classic.Repacker.Engine.Models;
 using Maple.Classic.Repacker.Engine.Workspace;
+using Maple.Classic.Repacker.UI.Rpc;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -240,24 +241,24 @@ internal sealed class RepackerDesktopForm : Form {
             Renderer = new DarkContextMenuRenderer(),
         };
 
-        menuAddProp = CreateTreeContextMenuItem("+ Add Child Property...", "addProp");
-        menuCopy = CreateTreeContextMenuItem("Copy", "copy", "Ctrl+C");
-        menuDuplicate = CreateTreeContextMenuItem("Duplicate", "duplicate", "Ctrl+D");
-        menuRename = CreateTreeContextMenuItem("Rename", "rename", "F2");
-        menuExportAuto = CreateTreeContextMenuItem("Export Node...", "exportAuto");
-        menuRestore = CreateTreeContextMenuItem("Restore Node", "restore", style: ContextMenuItemStyle.Success);
-        menuDelete = CreateTreeContextMenuItem("Delete Node", "delete", "Del", ContextMenuItemStyle.Danger);
-        menuCloseArchive = CreateTreeContextMenuItem("Close Archive", "closeArchive", "Del", ContextMenuItemStyle.Danger);
+        menuAddProp = CreateTreeContextMenuItem("+ Add Child Property...", TreeContextMenuCommand.AddProp);
+        menuCopy = CreateTreeContextMenuItem("Copy", TreeContextMenuCommand.Copy, "Ctrl+C");
+        menuDuplicate = CreateTreeContextMenuItem("Duplicate", TreeContextMenuCommand.Duplicate, "Ctrl+D");
+        menuRename = CreateTreeContextMenuItem("Rename", TreeContextMenuCommand.Rename, "F2");
+        menuExportAuto = CreateTreeContextMenuItem("Export Node...", TreeContextMenuCommand.ExportAuto);
+        menuRestore = CreateTreeContextMenuItem("Restore Node", TreeContextMenuCommand.Restore, style: ContextMenuItemStyle.Success);
+        menuDelete = CreateTreeContextMenuItem("Delete Node", TreeContextMenuCommand.Delete, "Del", ContextMenuItemStyle.Danger);
+        menuCloseArchive = CreateTreeContextMenuItem("Close Archive", TreeContextMenuCommand.CloseArchive, "Del", ContextMenuItemStyle.Danger);
 
         treeContextMenu.Items.AddRange([
-            CreateTreeContextMenuItem("Inspect Node", "inspect"),
+            CreateTreeContextMenuItem("Inspect Node", TreeContextMenuCommand.Inspect),
             new ToolStripSeparator(),
             menuAddProp,
-            CreateTreeContextMenuItem("+ Add .img Image...", "addImg"),
-            CreateTreeContextMenuItem("+ Add Directory...", "addDir"),
+            CreateTreeContextMenuItem("+ Add .img Image...", TreeContextMenuCommand.AddImg),
+            CreateTreeContextMenuItem("+ Add Directory...", TreeContextMenuCommand.AddDir),
             new ToolStripSeparator(),
             menuCopy,
-            CreateTreeContextMenuItem("Paste", "paste", "Ctrl+V"),
+            CreateTreeContextMenuItem("Paste", TreeContextMenuCommand.Paste, "Ctrl+V"),
             menuDuplicate,
             menuRename,
             new ToolStripSeparator(),
@@ -308,8 +309,8 @@ internal sealed class RepackerDesktopForm : Form {
             e.Cancel = true;
             CloseNativeContextMenu();
             string payload = JsonSerializer.Serialize(new {
-                type = "requestAppClose",
-            });
+                type = HostWebMessageType.RequestAppClose,
+            }, HostWebMessageJson.Options);
             webView.CoreWebView2.PostWebMessageAsJson(payload);
             return;
         }
@@ -364,11 +365,11 @@ internal sealed class RepackerDesktopForm : Form {
         Success,
     }
 
-    private sealed record ContextMenuItemMetadata(string CommandId, ContextMenuItemStyle Style);
+    private sealed record ContextMenuItemMetadata(TreeContextMenuCommand Command, ContextMenuItemStyle Style);
 
     private ToolStripMenuItem CreateTreeContextMenuItem(
         string text,
-        string commandId,
+        TreeContextMenuCommand command,
         string? shortcutDisplay = null,
         ContextMenuItemStyle style = ContextMenuItemStyle.Default) {
         Color foreColor = style switch {
@@ -377,7 +378,7 @@ internal sealed class RepackerDesktopForm : Form {
             _ => Color.FromArgb(212, 212, 212),
         };
         var item = new ToolStripMenuItem(text) {
-            Tag = new ContextMenuItemMetadata(commandId, style),
+            Tag = new ContextMenuItemMetadata(command, style),
             ShortcutKeyDisplayString = shortcutDisplay ?? string.Empty,
             Padding = new Padding(4, 3, 4, 3),
             ForeColor = foreColor,
@@ -387,11 +388,11 @@ internal sealed class RepackerDesktopForm : Form {
                 return;
             }
             string payload = JsonSerializer.Serialize(new {
-                type = "treeContextMenuCommand",
-                cmd = commandId,
+                type = HostWebMessageType.TreeContextMenuCommand,
+                cmd = command,
                 archiveId = contextTargetArchiveId,
                 path = contextTargetPath,
-            });
+            }, HostWebMessageJson.Options);
             webView.CoreWebView2.PostWebMessageAsJson(payload);
         };
         return item;
@@ -491,8 +492,10 @@ internal sealed class RepackerDesktopForm : Form {
             if (!root.TryGetProperty("type", out JsonElement typeEl)) {
                 return;
             }
-            string? msgType = typeEl.GetString();
-            if (string.Equals(msgType, "openTreeContextMenu", StringComparison.Ordinal)) {
+            if (!Enum.TryParse(typeEl.GetString(), ignoreCase: true, out HostWebMessageType msgType)) {
+                return;
+            }
+            if (msgType == HostWebMessageType.OpenTreeContextMenu) {
                 contextTargetArchiveId = root.TryGetProperty("archiveId", out JsonElement arEl)
                     ? arEl.GetString() ?? string.Empty
                     : string.Empty;
@@ -515,9 +518,9 @@ internal sealed class RepackerDesktopForm : Form {
                 menuCloseArchive.Visible = isArchiveRoot;
 
                 treeContextMenu.Show(Cursor.Position);
-            } else if (string.Equals(msgType, "closeTreeContextMenu", StringComparison.Ordinal)) {
+            } else if (msgType == HostWebMessageType.CloseTreeContextMenu) {
                 CloseNativeContextMenu();
-            } else if (string.Equals(msgType, "confirmAppClose", StringComparison.Ordinal)) {
+            } else if (msgType == HostWebMessageType.ConfirmAppClose) {
                 allowImmediateClose = true;
                 BeginInvoke(Close);
             }

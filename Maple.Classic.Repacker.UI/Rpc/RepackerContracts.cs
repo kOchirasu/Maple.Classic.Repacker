@@ -179,12 +179,6 @@ public sealed class SaveUiStateRequest {
     public SavedRepackerUiStateDto? UiState { get; set; }
 }
 
-public sealed class ExportNodeRequest {
-    public string? ArchiveId { get; set; }
-    public string? Path { get; set; }
-    public RepackerExportFormat Format { get; set; } = RepackerExportFormat.Auto;
-}
-
 public sealed class BatchExportRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }

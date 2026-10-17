@@ -103,7 +103,7 @@ namespace MapleRepacker {
 
             this.layout = new LayoutController({
                 onLayoutChanged: (layoutDto) => {
-                    void rpcCall('ui.saveState', { uiState: { layout: layoutDto } });
+                    void rpcCall(RpcMethod.UiSaveState, { uiState: { layout: layoutDto } });
                 },
             });
 
@@ -289,7 +289,7 @@ namespace MapleRepacker {
         }
 
         private async fetchTreeChildren(archiveId: string, parentPath: string): Promise<TreeNodeDto[]> {
-            const res = await rpcCall<TreeChildrenResponse>('tree.children', {
+            const res = await rpcCall<TreeChildrenResponse>(RpcMethod.TreeChildren, {
                 archiveId,
                 path: parentPath,
             });
@@ -622,7 +622,7 @@ namespace MapleRepacker {
                 this.renderTree();
             }
 
-            const res = await rpcCall<NodeInspectionDto>('node.inspect', {
+            const res = await rpcCall<NodeInspectionDto>(RpcMethod.NodeInspect, {
                 archiveId,
                 path,
             });
@@ -1622,7 +1622,7 @@ namespace MapleRepacker {
                         }
                     }
                     const bytes = new Uint8Array(await file.arrayBuffer());
-                    const res = await rpcCall<RpcOperationResponse>('workspace.openBytes', {
+                    const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceOpenBytes, {
                         fileName: file.name,
                         filePath: nativePath || undefined,
                         data: bytes,
@@ -1650,7 +1650,7 @@ namespace MapleRepacker {
                 const fmt =
                     ((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value as WzCanvasFormat) ||
                     WzCanvasFormat.Bgra8888;
-                const res = await rpcCall<RpcOperationResponse>('node.replaceCanvas', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeReplaceCanvas, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     pngBytes: bytes,
@@ -1671,7 +1671,7 @@ namespace MapleRepacker {
                 audioInput.value = '';
                 if (!file || !this.selectedArchiveId || !this.selectedPath) return;
                 const bytes = new Uint8Array(await file.arrayBuffer());
-                const res = await rpcCall<RpcOperationResponse>('node.replaceSound', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeReplaceSound, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     audioBytes: bytes,
@@ -1990,7 +1990,7 @@ namespace MapleRepacker {
                     document.querySelectorAll('[data-bg]').forEach((b) => b.classList.remove('active'));
                     btn.classList.add('active');
                     viewport.className = `canvas-viewport bg-${bg.toLowerCase()}`;
-                    void rpcCall('ui.saveState', { uiState: { canvasBackground: bg } });
+                    void rpcCall(RpcMethod.UiSaveState, { uiState: { canvasBackground: bg } });
                 });
             });
 
@@ -2039,19 +2039,19 @@ namespace MapleRepacker {
             document.getElementById('chkShowOrigin')!.addEventListener('change', (ev) => {
                 this.showOrigin = (ev.target as HTMLInputElement).checked;
                 this.drawActiveCanvasFrame();
-                void rpcCall('ui.saveState', { uiState: { showOriginCrosshair: this.showOrigin } });
+                void rpcCall(RpcMethod.UiSaveState, { uiState: { showOriginCrosshair: this.showOrigin } });
             });
 
             document.getElementById('chkShowVectors')!.addEventListener('change', (ev) => {
                 this.showVectors = (ev.target as HTMLInputElement).checked;
                 this.drawActiveCanvasFrame();
-                void rpcCall('ui.saveState', { uiState: { showVectorBounds: this.showVectors } });
+                void rpcCall(RpcMethod.UiSaveState, { uiState: { showVectorBounds: this.showVectors } });
             });
 
             document.getElementById('chkShowPixelGrid')!.addEventListener('change', (ev) => {
                 this.showPixelGrid = (ev.target as HTMLInputElement).checked;
                 this.drawActiveCanvasFrame();
-                void rpcCall('ui.saveState', { uiState: { showPixelGrid: this.showPixelGrid } });
+                void rpcCall(RpcMethod.UiSaveState, { uiState: { showPixelGrid: this.showPixelGrid } });
             });
 
             // Animation controls
@@ -2095,7 +2095,7 @@ namespace MapleRepacker {
                 const fmt =
                     ((document.getElementById('canvasFormatSelect') as HTMLSelectElement).value as WzCanvasFormat) ||
                     WzCanvasFormat.Bgra8888;
-                const res = await rpcCall<RpcOperationResponse>('node.changeCanvasFormat', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeChangeCanvasFormat, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     format: fmt,
@@ -2217,7 +2217,7 @@ namespace MapleRepacker {
                 const vecX = Number((document.getElementById('editVecX') as HTMLInputElement).value) || 0;
                 const vecY = Number((document.getElementById('editVecY') as HTMLInputElement).value) || 0;
 
-                const res = await rpcCall<RpcOperationResponse>('node.setValue', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeSetValue, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     kind,
@@ -2303,7 +2303,7 @@ namespace MapleRepacker {
                 const kindStr = (document.getElementById('searchKindSelect') as HTMLSelectElement).value;
                 const exactMatch = (document.getElementById('chkSearchExact') as HTMLInputElement).checked;
 
-                const res = await rpcCall<SearchResponseDto>('search.query', {
+                const res = await rpcCall<SearchResponseDto>(RpcMethod.SearchQuery, {
                     archiveId: archiveId || undefined,
                     query,
                     valueQuery,
@@ -2342,7 +2342,7 @@ namespace MapleRepacker {
 
             // Clear logs
             document.getElementById('btnClearLogs')!.addEventListener('click', () => {
-                void rpcCall('logs.clear', {});
+                void rpcCall(RpcMethod.LogsClear, {});
             });
         }
 
@@ -2373,7 +2373,7 @@ namespace MapleRepacker {
             if (tabId === RepackerWorkbenchTab.Json && this.jsonEditor) {
                 this.jsonEditor.refresh();
             }
-            void rpcCall('ui.saveState', { uiState: { activeWorkbenchTab: tabId } });
+            void rpcCall(RpcMethod.UiSaveState, { uiState: { activeWorkbenchTab: tabId } });
         }
 
         private focusGlobalSearch(): void {
@@ -2451,7 +2451,7 @@ namespace MapleRepacker {
         private async applyJsonFromEditor(): Promise<void> {
             if (!this.jsonEditor || !this.selectedArchiveId || !this.selectedPath) return;
             const jsonText = this.jsonEditor.getValue();
-            const res = await rpcCall<RpcOperationResponse>('node.applyJson', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeApplyJson, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
                 jsonText,
@@ -2467,7 +2467,7 @@ namespace MapleRepacker {
 
         private async undoSelectedImage(): Promise<void> {
             if (!this.selectedArchiveId) return;
-            const res = await rpcCall<RpcOperationResponse>('node.undo', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeUndo, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
@@ -2486,7 +2486,7 @@ namespace MapleRepacker {
 
         private async redoSelectedImage(): Promise<void> {
             if (!this.selectedArchiveId) return;
-            const res = await rpcCall<RpcOperationResponse>('node.redo', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeRedo, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
@@ -2505,7 +2505,7 @@ namespace MapleRepacker {
 
         private async copySelectedNode(): Promise<void> {
             if (!this.selectedArchiveId || !this.selectedPath) return;
-            const res = await rpcCall<RpcOperationResponse>('node.copy', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeCopy, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
@@ -2518,7 +2518,7 @@ namespace MapleRepacker {
 
         private async pasteIntoSelectedNode(): Promise<void> {
             if (!this.selectedArchiveId) return;
-            const res = await rpcCall<RpcOperationResponse>('node.paste', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodePaste, {
                 archiveId: this.selectedArchiveId,
                 targetPath: this.selectedPath,
             });
@@ -2533,7 +2533,7 @@ namespace MapleRepacker {
 
         private async duplicateSelectedNode(): Promise<void> {
             if (!this.selectedArchiveId || !this.selectedPath) return;
-            const res = await rpcCall<RpcOperationResponse>('node.duplicate', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeDuplicate, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
@@ -2553,7 +2553,7 @@ namespace MapleRepacker {
                 return;
             }
             const targetPath = this.selectedPath;
-            const res = await rpcCall<RpcOperationResponse>('node.delete', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeDelete, {
                 archiveId: this.selectedArchiveId,
                 path: targetPath,
             });
@@ -2574,7 +2574,7 @@ namespace MapleRepacker {
         private async restoreSelectedNode(): Promise<void> {
             if (!this.selectedArchiveId || !this.selectedPath) return;
             const targetPath = this.selectedPath;
-            const res = await rpcCall<RpcOperationResponse>('node.restore', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeRestore, {
                 archiveId: this.selectedArchiveId,
                 path: targetPath,
             });
@@ -2590,7 +2590,7 @@ namespace MapleRepacker {
 
         private async inlineLinksInCurrentScope(): Promise<void> {
             if (!this.selectedArchiveId) return;
-            const res = await rpcCall<RpcOperationResponse>('node.inlineOutlinks', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeInlineOutlinks, {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
             });
@@ -2619,7 +2619,7 @@ namespace MapleRepacker {
         }
 
         private async exportAndDownloadArchiveById(archiveId: string, version?: number): Promise<boolean> {
-            const res = await rpcCall<BinaryExportResponseDto>('workspace.exportArchive', {
+            const res = await rpcCall<BinaryExportResponseDto>(RpcMethod.WorkspaceExportArchive, {
                 archiveId,
                 version,
             });
@@ -2659,7 +2659,7 @@ namespace MapleRepacker {
 
         private async performCloseArchive(archiveId: string): Promise<void> {
             const arName = this.archives.find((a) => a.archiveId === archiveId)?.name || 'archive';
-            const res = await rpcCall<RpcOperationResponse>('workspace.closeArchive', {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceCloseArchive, {
                 archiveId,
             });
             if (res.ok) {
@@ -2695,7 +2695,7 @@ namespace MapleRepacker {
         private async saveOrExportSingleArchive(ar: ArchiveSummaryDto): Promise<boolean> {
             let targetFilePath = (ar.filePath || '').trim();
             if (!targetFilePath && this.supportsNativeDialogs) {
-                const browseRes = await rpcCall<RpcOperationResponse>('workspace.browseSaveFile', {
+                const browseRes = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseSaveFile, {
                     defaultFileName: ar.name,
                 });
                 if (browseRes.data?.cancelled || !browseRes.ok || !browseRes.data?.path) {
@@ -2705,7 +2705,7 @@ namespace MapleRepacker {
             }
 
             if (targetFilePath) {
-                const saveRes = await rpcCall<RpcOperationResponse>('workspace.saveArchive', {
+                const saveRes = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceSaveArchive, {
                     archiveId: ar.archiveId,
                     targetFilePath,
                     version: ar.version,
@@ -3036,7 +3036,7 @@ namespace MapleRepacker {
         }
 
         private async browseNativeWzFile(): Promise<void> {
-            const res = await rpcCall<RpcOperationResponse>('workspace.browseFiles', {});
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseFiles, {});
             if (res.data?.cancelled) {
                 return;
             }
@@ -3062,7 +3062,7 @@ namespace MapleRepacker {
                     }
                 }
 
-                const openRes = await rpcCall<RpcOperationResponse>('workspace.openFile', { filePath });
+                const openRes = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceOpenFile, { filePath });
                 if (openRes.ok && openRes.data.archiveId) {
                     this.clearArchiveTreeCache(openRes.data.archiveId);
                     lastArchiveId = openRes.data.archiveId;
@@ -3093,7 +3093,7 @@ namespace MapleRepacker {
         }
 
         private async browseNativeDirectory(): Promise<void> {
-            const res = await rpcCall<RpcOperationResponse>('workspace.browseAndOpenDirectory', {});
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseAndOpenDirectory, {});
             if (res.data?.cancelled) {
                 return;
             }
@@ -3129,7 +3129,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const directoryPath = (document.getElementById('modalDirPathInput') as HTMLInputElement).value.trim();
                 if (!directoryPath) return;
-                const res = await rpcCall<RpcOperationResponse>('workspace.openDirectory', { directoryPath });
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceOpenDirectory, { directoryPath });
                 if (res.ok) {
                     this.closeModal();
                     this.treeState.childrenByParent.clear();
@@ -3167,7 +3167,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const name = (document.getElementById('modalNewArchiveName') as HTMLInputElement).value.trim();
                 const version = Number((document.getElementById('modalNewArchiveVer') as HTMLInputElement).value) || 779;
-                const res = await rpcCall<RpcOperationResponse>('workspace.createArchive', { name, version });
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceCreateArchive, { name, version });
                 if (res.ok && res.data.archiveId) {
                     this.closeModal();
                     this.showToast(`Created archive ${name}`, ToastKind.Success);
@@ -3208,7 +3208,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalSaveDisk')!.addEventListener('click', async () => {
                 const targetFilePath = (document.getElementById('modalSaveFilePath') as HTMLInputElement).value.trim();
                 const version = Number((document.getElementById('modalSaveWzVer') as HTMLInputElement).value) || currentAr.version;
-                const res = await rpcCall<RpcOperationResponse>('workspace.saveArchive', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceSaveArchive, {
                     archiveId: currentAr.archiveId,
                     targetFilePath,
                     version,
@@ -3276,7 +3276,7 @@ namespace MapleRepacker {
             const browseBtn = document.getElementById('btnModalBrowseExportDir');
             if (browseBtn) {
                 browseBtn.addEventListener('click', async () => {
-                    const res = await rpcCall<RpcOperationResponse>('workspace.browseDirectory', {});
+                    const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseDirectory, {});
                     if (res.ok && res.data?.path) {
                         dirInput.value = res.data.path;
                     }
@@ -3298,7 +3298,7 @@ namespace MapleRepacker {
                 const confirmBtn = document.getElementById('btnModalConfirmBulkExport') as HTMLButtonElement;
                 confirmBtn.disabled = true;
 
-                const res = await rpcCall<RpcOperationResponse>('node.batchExport', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeBatchExport, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     outputDirectory: outDir,
@@ -3434,7 +3434,7 @@ namespace MapleRepacker {
                 const vecX = Number((document.getElementById('modalVecX') as HTMLInputElement).value) || 0;
                 const vecY = Number((document.getElementById('modalVecY') as HTMLInputElement).value) || 0;
 
-                const res = await rpcCall<RpcOperationResponse>('node.addProperty', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeAddProperty, {
                     archiveId: this.selectedArchiveId,
                     parentPath: this.selectedPath,
                     name,
@@ -3473,7 +3473,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const imageName = (document.getElementById('modalImgName') as HTMLInputElement).value.trim();
-                const res = await rpcCall<RpcOperationResponse>('node.addImage', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeAddImage, {
                     archiveId: this.selectedArchiveId,
                     parentPath: this.selectedPath,
                     imageName,
@@ -3508,7 +3508,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const dirName = (document.getElementById('modalDirName') as HTMLInputElement).value.trim();
-                const res = await rpcCall<RpcOperationResponse>('node.addDirectory', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeAddDirectory, {
                     archiveId: this.selectedArchiveId,
                     parentPath: this.selectedPath,
                     dirName,
@@ -3543,7 +3543,7 @@ namespace MapleRepacker {
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const newName = (document.getElementById('modalRenameInput') as HTMLInputElement).value.trim();
-                const res = await rpcCall<RpcOperationResponse>('node.rename', {
+                const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeRename, {
                     archiveId: this.selectedArchiveId,
                     path: this.selectedPath,
                     newName,

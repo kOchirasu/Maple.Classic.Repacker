@@ -9,29 +9,26 @@ namespace Maple.Classic.Repacker.Engine.Workspace;
 /// Formatting helpers that describe <see cref="WzValue"/> nodes for the UI (type badges, display values, byte sizes, hex slices).
 /// </summary>
 public static class WzValueFormatter {
-    public static (RepackerPropertyKind Kind, string Badge, string DisplayValue) DescribeWzValue(WzValue v) => v switch {
-        WzValue.Null => (RepackerPropertyKind.Null, "NULL", "null"),
-        WzValue.Short(var x) => (RepackerPropertyKind.Short, "I16", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Int(var x) => (RepackerPropertyKind.Int, "I32", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Long(var x) => (RepackerPropertyKind.Long, "I64", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Float(var x) => (RepackerPropertyKind.Float, "F32", x.ToString("G", CultureInfo.InvariantCulture)),
-        WzValue.Double(var x) => (RepackerPropertyKind.Double, "F64", x.ToString("G", CultureInfo.InvariantCulture)),
-        WzValue.String(var s) => (RepackerPropertyKind.String, "STR", s),
-        WzValue.Vector(var x, var y) => (RepackerPropertyKind.Vector, "VEC", $"({x}, {y})"),
-        WzValue.Uol(var s) => (RepackerPropertyKind.Uol, "UOL", $"-> {s}"),
-        WzValue.Object(var props) => (RepackerPropertyKind.Object, "SUB", $"{props.Count} properties"),
-        WzValue.Canvas c => (
-            RepackerPropertyKind.Canvas,
-            "PNG",
-            $"{c.Width}x{c.Height} ({WzCanvasFormatExtensions.GetDisplayName(c.Format)})"),
-        WzValue.Sound(var len, var dur) => (
-            RepackerPropertyKind.Sound,
-            "SND",
-            $"{dur} ms ({FormatByteSize(len)})"),
-        WzValue.Convex(var items) => (RepackerPropertyKind.Convex, "CVX", $"{items.Count} shapes"),
-        WzValue.RawData(var len) => (RepackerPropertyKind.RawData, "RAW", FormatByteSize(len)),
-        _ => (RepackerPropertyKind.None, "UNK", string.Empty),
-    };
+    public static (RepackerPropertyKind Kind, string Badge, string DisplayValue) DescribeWzValue(WzValue v) {
+        (RepackerPropertyKind kind, string display) = v switch {
+            WzValue.Null => (RepackerPropertyKind.Null, "null"),
+            WzValue.Short(var x) => (RepackerPropertyKind.Short, x.ToString(CultureInfo.InvariantCulture)),
+            WzValue.Int(var x) => (RepackerPropertyKind.Int, x.ToString(CultureInfo.InvariantCulture)),
+            WzValue.Long(var x) => (RepackerPropertyKind.Long, x.ToString(CultureInfo.InvariantCulture)),
+            WzValue.Float(var x) => (RepackerPropertyKind.Float, x.ToString("G", CultureInfo.InvariantCulture)),
+            WzValue.Double(var x) => (RepackerPropertyKind.Double, x.ToString("G", CultureInfo.InvariantCulture)),
+            WzValue.String(var s) => (RepackerPropertyKind.String, s),
+            WzValue.Vector(var x, var y) => (RepackerPropertyKind.Vector, $"({x}, {y})"),
+            WzValue.Uol(var s) => (RepackerPropertyKind.Uol, $"-> {s}"),
+            WzValue.Object(var props) => (RepackerPropertyKind.Object, $"{props.Count} properties"),
+            WzValue.Canvas c => (RepackerPropertyKind.Canvas, $"{c.Width}x{c.Height} ({((WzCanvasFormat) c.Format).GetDisplayName()})"),
+            WzValue.Sound(var len, var dur) => (RepackerPropertyKind.Sound, $"{dur} ms ({FormatByteSize(len)})"),
+            WzValue.Convex(var items) => (RepackerPropertyKind.Convex, $"{items.Count} shapes"),
+            WzValue.RawData(var len) => (RepackerPropertyKind.RawData, FormatByteSize(len)),
+            _ => (RepackerPropertyKind.None, string.Empty),
+        };
+        return (kind, kind.GetShortName(), display);
+    }
 
     internal static WzValue CreatePrimitiveOrStructuredValue(
         RepackerPropertyKind kind,

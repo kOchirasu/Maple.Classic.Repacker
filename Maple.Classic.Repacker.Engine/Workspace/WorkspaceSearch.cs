@@ -34,7 +34,7 @@ internal static class WorkspaceSearch {
                         child.Name,
                         RepackerNodeKind.Directory,
                         RepackerPropertyKind.None,
-                        "DIR",
+                        RepackerNodeKind.Directory.GetShortName(),
                         $"{child.Children.Count} items"));
                 }
                 SearchDirectory(session, child, fullPath, nameFilter, valFilter, kindFilter, exact, cmp, maxResults, results);
@@ -47,7 +47,7 @@ internal static class WorkspaceSearch {
                         child.Name,
                         RepackerNodeKind.Image,
                         RepackerPropertyKind.Object,
-                        "IMG",
+                        RepackerNodeKind.Image.GetShortName(),
                         FormatByteSize(session.GetImageSize(fullPath))));
                 }
 

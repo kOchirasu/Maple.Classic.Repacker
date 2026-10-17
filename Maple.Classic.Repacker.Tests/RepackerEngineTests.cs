@@ -49,7 +49,7 @@ public sealed class RepackerEngineTests {
             }
         }
 
-        byte[] compressed = WzCanvasCodec.EncodeFromRgba(width, height, (int) format, rgba);
+        byte[] compressed = WzCanvasCodec.EncodeFromRgba(width, height, format, rgba);
         Assert.NotEmpty(compressed);
 
         var canvasVal = new WzValue.Canvas(width, height, (int) format, compressed);
@@ -123,8 +123,8 @@ public sealed class RepackerEngineTests {
 
         byte[] sprite36 = new byte[36 * 36 * 4];
         Array.Fill(sprite36, (byte) 200);
-        byte[] encoded36 = WzCanvasCodec.EncodeFromRgba(36, 36, (int) WzCanvasFormat.Bgra8888, sprite36);
-        byte[] dummy1x1 = WzCanvasCodec.EncodeFromRgba(1, 1, (int) WzCanvasFormat.Bgra4444, [0, 0, 0, 0]);
+        byte[] encoded36 = WzCanvasCodec.EncodeFromRgba(36, 36, WzCanvasFormat.Bgra8888, sprite36);
+        byte[] dummy1x1 = WzCanvasCodec.EncodeFromRgba(1, 1, WzCanvasFormat.Bgra4444, [0, 0, 0, 0]);
 
         byte[] charBytes;
         using (var charWz = new WzArchive()) {
@@ -381,7 +381,7 @@ public sealed class RepackerEngineTests {
                 rgba[i + 2] = 240;
                 rgba[i + 3] = 255;
             }
-            byte[] encodedSprite = WzCanvasCodec.EncodeFromRgba(24, 20, (int) WzCanvasFormat.Bgra8888, rgba);
+            byte[] encodedSprite = WzCanvasCodec.EncodeFromRgba(24, 20, WzCanvasFormat.Bgra8888, rgba);
             using (var coatCanvasWz = new WzArchive()) {
                 var canvasImg = new WzValue.Object();
                 canvasImg["stand1/0/mail"] = new WzValue.Canvas(
@@ -403,7 +403,7 @@ public sealed class RepackerEngineTests {
                     1,
                     1,
                     (int) WzCanvasFormat.Bgra4444,
-                    WzCanvasCodec.EncodeFromRgba(1, 1, (int) WzCanvasFormat.Bgra4444, [0, 0, 0, 0]),
+                    WzCanvasCodec.EncodeFromRgba(1, 1, WzCanvasFormat.Bgra4444, [0, 0, 0, 0]),
                     [
                         new WzProperty("origin", (11, 19)),
                         new WzProperty("_outlink", "Character/Coat/_Canvas/01040000.img/stand1/0/mail"),
