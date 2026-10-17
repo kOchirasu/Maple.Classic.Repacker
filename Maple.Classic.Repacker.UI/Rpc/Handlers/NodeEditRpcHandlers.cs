@@ -4,49 +4,36 @@ namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 
 /// <summary>
 /// Structural node edits (values, add/rename/delete/restore, duplicate, copy/paste) and undo/redo history.
+/// Every edit replies with the path the UI should select next.
 /// </summary>
 internal static class NodeEditRpcHandlers {
     public static void Register(RpcRouter router) {
-        router.Map(RpcMethod.NodeSetValue, NodeSetValue);
-        router.Map(RpcMethod.NodeAddProperty, NodeAddProperty);
-        router.Map(RpcMethod.NodeAddImage, NodeAddImage);
-        router.Map(RpcMethod.NodeAddDirectory, NodeAddDirectory);
-        router.Map(RpcMethod.NodeRename, NodeRename);
-        router.Map(RpcMethod.NodeDelete, NodeDelete);
-        router.Map(RpcMethod.NodeRestore, NodeRestore);
-        router.Map(RpcMethod.NodeDuplicate, NodeDuplicate);
-        router.Map(RpcMethod.NodeCopy, NodeCopy);
-        router.Map(RpcMethod.NodePaste, NodePaste);
-        router.Map(RpcMethod.NodeUndo, NodeUndo);
-        router.Map(RpcMethod.NodeRedo, NodeRedo);
+        router.Map<SetPropertyValueRequest>(RpcMethod.NodeSetValue, SetValue);
+        router.Map<AddPropertyRequest>(RpcMethod.NodeAddProperty, AddProperty);
+        router.Map<AddImageRequest>(RpcMethod.NodeAddImage, AddImage);
+        router.Map<AddDirectoryRequest>(RpcMethod.NodeAddDirectory, AddDirectory);
+        router.Map<RenameNodeRequest>(RpcMethod.NodeRename, Rename);
+        router.Map<NodeRefRequest>(RpcMethod.NodeDelete, Delete);
+        router.Map<NodeRefRequest>(RpcMethod.NodeRestore, Restore);
+        router.Map<NodeRefRequest>(RpcMethod.NodeDuplicate, Duplicate);
+        router.Map<NodeRefRequest>(RpcMethod.NodeCopy, Copy);
+        router.Map<PasteNodeRequest>(RpcMethod.NodePaste, Paste);
+        router.Map<NodeRefRequest>(RpcMethod.NodeUndo, Undo);
+        router.Map<NodeRefRequest>(RpcMethod.NodeRedo, Redo);
     }
 
-    private static (bool Ok, object? Data) NodeSetValue(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        SetPropertyValueRequest req = RpcSerializer.DecodeParams<SetPropertyValueRequest>(rawParams);
+    private static RpcOperationResponse SetValue(RpcContext ctx, SetPropertyValueRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err) = ctx.Workspace.SetPropertyValue(
-            archiveId,
-            path,
-            req.Kind,
-            req.RawValue,
-            req.VecX,
-            req.VecY);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: path,
-            Status: ctx.BuildStatus()));
+        string? error = ctx.Workspace.SetPropertyValue(archiveId, path, req.Kind, req.RawValue, req.VecX, req.VecY);
+        return ctx.Result(error, archiveId, path);
     }
 
-    private static (bool Ok, object? Data) NodeAddProperty(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        AddPropertyRequest req = RpcSerializer.DecodeParams<AddPropertyRequest>(rawParams);
+    private static RpcOperationResponse AddProperty(RpcContext ctx, AddPropertyRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string parentPath = ctx.ResolvePath(req.ParentPath);
-        (bool ok, string? err, string createdPath) = ctx.Workspace.AddProperty(
+        (string? error, string createdPath) = ctx.Workspace.AddProperty(
             archiveId,
-            parentPath,
+            ctx.ResolvePath(req.ParentPath),
             req.Name ?? string.Empty,
             req.Kind,
             req.RawValue,
@@ -54,148 +41,74 @@ internal static class NodeEditRpcHandlers {
             req.VecY,
             req.BinaryPayload,
             req.CanvasFormat);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: createdPath,
-            Status: ctx.BuildStatus()));
+        return ctx.Result(error, archiveId, createdPath);
     }
 
-    private static (bool Ok, object? Data) NodeAddImage(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        AddImageRequest req = RpcSerializer.DecodeParams<AddImageRequest>(rawParams);
+    private static RpcOperationResponse AddImage(RpcContext ctx, AddImageRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        (bool ok, string? err, string createdPath) = ctx.Workspace.AddImage(
+        (string? error, string createdPath) = ctx.Workspace.AddImage(
             archiveId,
             ctx.ResolvePath(req.ParentPath),
             req.ImageName ?? string.Empty,
             req.RawImgBytes,
             req.JsonContent);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: createdPath,
-            Status: ctx.BuildStatus()));
+        return ctx.Result(error, archiveId, createdPath);
     }
 
-    private static (bool Ok, object? Data) NodeAddDirectory(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        AddDirectoryRequest req = RpcSerializer.DecodeParams<AddDirectoryRequest>(rawParams);
+    private static RpcOperationResponse AddDirectory(RpcContext ctx, AddDirectoryRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        (bool ok, string? err, string createdPath) = ctx.Workspace.AddDirectory(
-            archiveId,
-            ctx.ResolvePath(req.ParentPath),
-            req.DirName ?? string.Empty);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: createdPath,
-            Status: ctx.BuildStatus()));
+        (string? error, string createdPath) = ctx.Workspace.AddDirectory(archiveId, ctx.ResolvePath(req.ParentPath), req.DirName ?? string.Empty);
+        return ctx.Result(error, archiveId, createdPath);
     }
 
-    private static (bool Ok, object? Data) NodeRename(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        RenameNodeRequest req = RpcSerializer.DecodeParams<RenameNodeRequest>(rawParams);
+    private static RpcOperationResponse Rename(RpcContext ctx, RenameNodeRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, string newPath) = ctx.Workspace.RenameNode(archiveId, path, req.NewName ?? string.Empty);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: newPath,
-            Status: ctx.BuildStatus()));
+        (string? error, string newPath) = ctx.Workspace.RenameNode(archiveId, ctx.ResolvePath(req.Path), req.NewName ?? string.Empty);
+        return ctx.Result(error, archiveId, newPath);
     }
 
-    private static (bool Ok, object? Data) NodeDelete(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    private static RpcOperationResponse Delete(RpcContext ctx, NodeRefRequest req) {
+        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
+        (string? error, string parentPath) = ctx.Workspace.DeleteNode(archiveId, ctx.ResolvePath(req.Path));
+        return ctx.Result(error, archiveId, parentPath);
+    }
+
+    private static RpcOperationResponse Restore(RpcContext ctx, NodeRefRequest req) {
+        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
+        (string? error, string restoredPath) = ctx.Workspace.RestoreNode(archiveId, ctx.ResolvePath(req.Path));
+        return ctx.Result(error, archiveId, restoredPath);
+    }
+
+    private static RpcOperationResponse Duplicate(RpcContext ctx, NodeRefRequest req) {
+        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
+        (string? error, string newPath) = ctx.Workspace.DuplicateNode(archiveId, ctx.ResolvePath(req.Path));
+        return ctx.Result(error, archiveId, newPath);
+    }
+
+    private static RpcOperationResponse Copy(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, string parentPath) = ctx.Workspace.DeleteNode(archiveId, path);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: parentPath,
-            Status: ctx.BuildStatus()));
+        (string? error, ClipboardStateDto clipboard) = ctx.Workspace.CopyNode(archiveId, path);
+        return ctx.Result(error, archiveId, path) with { Clipboard = clipboard };
     }
 
-    private static (bool Ok, object? Data) NodeRestore(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    private static RpcOperationResponse Paste(RpcContext ctx, PasteNodeRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, string restoredPath) = ctx.Workspace.RestoreNode(archiveId, path);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: restoredPath,
-            Status: ctx.BuildStatus()));
+        (string? error, string pastedPath) = ctx.Workspace.PasteNode(archiveId, ctx.ResolvePath(req.TargetPath), req.OverrideName);
+        return ctx.Result(error, archiveId, pastedPath);
     }
 
-    private static (bool Ok, object? Data) NodeDuplicate(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    /// <summary>Undo is archive-wide; the reply's path is the node the undone change touched.</summary>
+    private static RpcOperationResponse Undo(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, string newPath) = ctx.Workspace.DuplicateNode(archiveId, path);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: newPath,
-            Status: ctx.BuildStatus()));
+        (string? error, string affectedPath) = ctx.Workspace.Undo(archiveId);
+        return ctx.Result(error, archiveId, error is null ? affectedPath : ctx.ResolvePath(req.Path));
     }
 
-    private static (bool Ok, object? Data) NodeCopy(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    /// <summary>Redo is archive-wide; the reply's path is the node the redone change touched.</summary>
+    private static RpcOperationResponse Redo(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, ClipboardStateDto clip) = ctx.Workspace.CopyNode(archiveId, path);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: path,
-            Clipboard: clip,
-            Status: ctx.BuildStatus()));
-    }
-
-    private static (bool Ok, object? Data) NodePaste(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        PasteNodeRequest req = RpcSerializer.DecodeParams<PasteNodeRequest>(rawParams);
-        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string targetPath = ctx.ResolvePath(req.TargetPath);
-        (bool ok, string? err, string pastedPath) = ctx.Workspace.PasteNode(archiveId, targetPath, req.OverrideName);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: pastedPath,
-            Status: ctx.BuildStatus()));
-    }
-
-    private static (bool Ok, object? Data) NodeUndo(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
-        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err) = ctx.Workspace.Undo(archiveId, path, out string affectedPath);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: !string.IsNullOrEmpty(affectedPath) ? affectedPath : path,
-            Status: ctx.BuildStatus()));
-    }
-
-    private static (bool Ok, object? Data) NodeRedo(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
-        string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err) = ctx.Workspace.Redo(archiveId, path, out string affectedPath);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: !string.IsNullOrEmpty(affectedPath) ? affectedPath : path,
-            Status: ctx.BuildStatus()));
+        (string? error, string affectedPath) = ctx.Workspace.Redo(archiveId);
+        return ctx.Result(error, archiveId, error is null ? affectedPath : ctx.ResolvePath(req.Path));
     }
 }

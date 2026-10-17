@@ -93,6 +93,22 @@ public static class WzValueFormatter {
         }
     }
 
+    /// <summary>Size of the binary payload carried by Canvas, Sound and RawData values; 0 for everything else.</summary>
+    internal static int GetPayloadSize(WzValue v) => v switch {
+        WzValue.Canvas c => c.Payload.Length,
+        WzValue.Sound s => s.DataLength,
+        WzValue.RawData r => r.DataLength,
+        _ => 0,
+    };
+
+    /// <summary>Number of direct (live) children: named properties of Object/Canvas, or items of a Convex.</summary>
+    internal static int GetChildCount(WzValue v) => v switch {
+        WzValue.Object(var props) => props.Count,
+        WzValue.Canvas c => c.Properties.Count,
+        WzValue.Convex(var items) => items.Count,
+        _ => 0,
+    };
+
     internal static string FormatByteSize(int bytes) => bytes switch {
         < 1024 => $"{bytes} B",
         < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",

@@ -2668,8 +2668,10 @@ namespace MapleRepacker {
                 }
                 this.showToast(`Closed "${arName}"`, ToastKind.Info);
                 this.currentInspection = null;
-                if (res.data?.status) {
-                    await this.handleWorkspaceStatus(res.data.status);
+                // The server pushed the post-close status before this reply; re-apply it now that the inspection is cleared
+                const latest = getLatestStatus();
+                if (latest) {
+                    await this.handleWorkspaceStatus(latest);
                 }
             } else {
                 this.showToast(res.data?.error || 'Failed to close archive', ToastKind.Error);
@@ -2705,9 +2707,6 @@ namespace MapleRepacker {
                     return false;
                 }
                 this.showToast(`Saved ${ar.name}`, ToastKind.Success);
-                if (saveRes.data?.status) {
-                    await this.handleWorkspaceStatus(saveRes.data.status);
-                }
                 return true;
             }
 

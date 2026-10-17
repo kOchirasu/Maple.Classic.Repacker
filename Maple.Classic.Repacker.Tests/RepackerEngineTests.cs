@@ -205,10 +205,10 @@ public sealed class RepackerEngineTests {
         Assert.Equal(3, stand1Node.AnimationFrames.Length);
 
         // 4. Inline external _outlink pixel data into PetEquip/01802653.img/5002828/stand0/0
-        (bool inlineOk, string? inlineErr, int inlinedCount) = workspace.InlineOutlinks(
+        (string? inlineErr, int inlinedCount) = workspace.InlineOutlinks(
             charArchiveId,
             "PetEquip/01802653.img/5002828/stand0/0");
-        Assert.True(inlineOk, inlineErr);
+        Assert.Null(inlineErr);
         Assert.Equal(1, inlinedCount);
 
         NodeInspectionDto afterInline = workspace.InspectNode(charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
@@ -218,14 +218,14 @@ public sealed class RepackerEngineTests {
         Assert.Equal(36, afterInline.Canvas.Height);
 
         // 5. Update primitive property & verify Undo / Redo
-        (bool updateOk, string? updateErr) = workspace.SetPropertyValue(
+        string? updateErr = workspace.SetPropertyValue(
             charArchiveId,
             "Coat/01040000.img/info/reqLevel",
             RepackerPropertyKind.Short,
             "25",
             null,
             null);
-        Assert.True(updateOk, updateErr);
+        Assert.Null(updateErr);
 
         NodeInspectionDto updatedLevel = workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel");
         Assert.Equal("25", updatedLevel.DisplayValue);
@@ -234,22 +234,22 @@ public sealed class RepackerEngineTests {
         Assert.Contains(updatedLevel.Children, c => c.Name == "islot" && c.Path == "Coat/01040000.img/info/islot");
         Assert.Contains(updatedLevel.Children, c => c.Name == "reqLevel" && c.Path == "Coat/01040000.img/info/reqLevel");
 
-        (bool undoOk, string? undoErr) = workspace.Undo(charArchiveId, "Coat/01040000.img/info/reqLevel");
-        Assert.True(undoOk, undoErr);
+        (string? undoErr, _) = workspace.Undo(charArchiveId);
+        Assert.Null(undoErr);
         Assert.Equal("10", workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
 
-        (bool redoOk, string? redoErr) = workspace.Redo(charArchiveId, "Coat/01040000.img/info/reqLevel");
-        Assert.True(redoOk, redoErr);
+        (string? redoErr, _) = workspace.Redo(charArchiveId);
+        Assert.Null(redoErr);
         Assert.Equal("25", workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
 
         // 6. Add, rename, duplicate, copy/paste, and delete property
-        (bool addOk, string? addErr, string addedPath) = workspace.AddProperty(
+        (string? addErr, string addedPath) = workspace.AddProperty(
             charArchiveId,
             "Coat/01040000.img/info",
             "customTag",
             RepackerPropertyKind.String,
             "Legend");
-        Assert.True(addOk, addErr);
+        Assert.Null(addErr);
         Assert.Equal("Coat/01040000.img/info/customTag", addedPath);
 
         TreeNodeDto[] infoChildren = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
@@ -262,22 +262,22 @@ public sealed class RepackerEngineTests {
         TreeNodeDto customTagChild = Assert.Single(infoChildren, n => n.Name == "customTag");
         Assert.Equal(RepackerChangeState.Added, customTagChild.ChangeState);
 
-        (bool renOk, string? renErr, string newPath) = workspace.RenameNode(
+        (string? renErr, string newPath) = workspace.RenameNode(
             charArchiveId,
             "Coat/01040000.img/info/customTag",
             "renamedTag");
-        Assert.True(renOk, renErr);
+        Assert.Null(renErr);
         Assert.Equal("Coat/01040000.img/info/renamedTag", newPath);
 
-        (bool copyOk, string? copyErr, _) = workspace.CopyNode(charArchiveId, "Coat/01040000.img/info/renamedTag");
-        Assert.True(copyOk, copyErr);
+        (string? copyErr, _) = workspace.CopyNode(charArchiveId, "Coat/01040000.img/info/renamedTag");
+        Assert.Null(copyErr);
 
-        (bool pasteOk, string? pasteErr, string pastedPath) = workspace.PasteNode(charArchiveId, "Coat/01040000.img/info");
-        Assert.True(pasteOk, pasteErr);
+        (string? pasteErr, string pastedPath) = workspace.PasteNode(charArchiveId, "Coat/01040000.img/info");
+        Assert.Null(pasteErr);
         Assert.NotEmpty(pastedPath);
 
-        (bool delOk, string? delErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
-        Assert.True(delOk, delErr);
+        (string? delErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
+        Assert.Null(delErr);
 
         TreeNodeDto[] infoAfterDel = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
         TreeNodeDto deletedTreeEntry = Assert.Single(infoAfterDel, n => n.Path == pastedPath);
@@ -288,20 +288,20 @@ public sealed class RepackerEngineTests {
         Assert.Equal(RepackerChangeState.Deleted, deletedInspect.ChangeState);
         Assert.Contains(deletedInspect.Children, c => c.Path == pastedPath && c.ChangeState == RepackerChangeState.Deleted);
 
-        (bool restoreOk, string? restoreErr, string restoredPath) = workspace.RestoreNode(charArchiveId, pastedPath);
-        Assert.True(restoreOk, restoreErr);
+        (string? restoreErr, string restoredPath) = workspace.RestoreNode(charArchiveId, pastedPath);
+        Assert.Null(restoreErr);
         Assert.Equal(pastedPath, restoredPath);
 
         TreeNodeDto[] infoAfterRestore = workspace.GetTreeChildren(charArchiveId, "Coat/01040000.img/info");
         TreeNodeDto restoredTreeEntry = Assert.Single(infoAfterRestore, n => n.Path == pastedPath);
         Assert.NotEqual(RepackerChangeState.Deleted, restoredTreeEntry.ChangeState);
 
-        (bool delAgainOk, string? delAgainErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
-        Assert.True(delAgainOk, delAgainErr);
+        (string? delAgainErr, _) = workspace.DeleteNode(charArchiveId, pastedPath);
+        Assert.Null(delAgainErr);
 
         // 6b. Delete an .img node and verify CanUndo / Undo / Redo restores and re-deletes the .img node
-        (bool delImgOk, string? delImgErr, _) = workspace.DeleteNode(charArchiveId, "Coat/01040000.img");
-        Assert.True(delImgOk, delImgErr);
+        (string? delImgErr, _) = workspace.DeleteNode(charArchiveId, "Coat/01040000.img");
+        Assert.Null(delImgErr);
 
         NodeInspectionDto deletedImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
         Assert.True(deletedImgInspect.Ok, deletedImgInspect.Error);
@@ -314,20 +314,20 @@ public sealed class RepackerEngineTests {
         NodeInspectionDto rootInspect = workspace.InspectNode(charArchiveId, "");
         Assert.True(rootInspect.CanUndo);
 
-        (bool undoImgOk, string? undoImgErr) = workspace.Undo(charArchiveId, "");
-        Assert.True(undoImgOk, undoImgErr);
+        (string? undoImgErr, _) = workspace.Undo(charArchiveId);
+        Assert.Null(undoImgErr);
 
         NodeInspectionDto restoredImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
         Assert.True(restoredImgInspect.Ok, restoredImgInspect.Error);
         Assert.NotEqual(RepackerChangeState.Deleted, restoredImgInspect.ChangeState);
         Assert.True(restoredImgInspect.CanRedo);
 
-        (bool redoImgOk, string? redoImgErr) = workspace.Redo(charArchiveId, "");
-        Assert.True(redoImgOk, redoImgErr);
+        (string? redoImgErr, _) = workspace.Redo(charArchiveId);
+        Assert.Null(redoImgErr);
         Assert.Equal(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
 
-        (bool undoImgAgainOk, string? undoImgAgainErr) = workspace.Undo(charArchiveId, "");
-        Assert.True(undoImgAgainOk, undoImgAgainErr);
+        (string? undoImgAgainErr, _) = workspace.Undo(charArchiveId);
+        Assert.Null(undoImgAgainErr);
         Assert.NotEqual(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
 
         // 7. Global search across archives
@@ -338,12 +338,48 @@ public sealed class RepackerEngineTests {
         Assert.NotEmpty(hits);
 
         // 8. Export repacked .wz archive bytes and verify WzArchive round-trip
-        (bool expOk, string? expErr, string wzFileName, byte[] wzBytes) = workspace.ExportArchiveBytes(charArchiveId);
-        Assert.True(expOk, expErr);
+        (string? expErr, string wzFileName, byte[] wzBytes) = workspace.ExportArchiveBytes(charArchiveId);
+        Assert.Null(expErr);
         Assert.Equal("Character_000.wz", wzFileName);
         using WzArchive repacked = WzArchive.FromBytes(wzBytes, "Character_000");
         WzValue coatImgRepacked = repacked.ParseImage("Coat/01040000.img");
         Assert.NotNull(coatImgRepacked["info"]);
+    }
+
+    [Fact]
+    public void FailedEdits_DoNotLeaveUndoEntries() {
+        using var workspace = new RepackerWorkspace();
+        byte[] archiveBytes;
+        using (var wz = new WzArchive()) {
+            var img = new WzValue.Object();
+            img["info/islot"] = "Ma";
+            img["info/reqLevel"] = new WzValue.Short(10);
+            wz.SetImage("Coat/01040000.img", img);
+            archiveBytes = wz.ToBytes();
+        }
+        string archiveId = workspace.OpenArchiveFromBytes("Character_000.wz", archiveBytes).ArchiveId;
+        const string reqLevel = "Coat/01040000.img/info/reqLevel";
+
+        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+
+        // Restoring a property that was never deleted fails and must not record an undo step
+        (string? restoreErr, _) = workspace.RestoreNode(archiveId, reqLevel);
+        Assert.NotNull(restoreErr);
+        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+
+        // Wrong-type edits are rejected before anything is captured
+        Assert.NotNull(workspace.ReplaceCanvasPng(archiveId, reqLevel, []));
+        Assert.NotNull(workspace.ApplyJsonSubtree(archiveId, reqLevel, "{ not json"));
+        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+        Assert.Equal(RepackerChangeState.Unchanged, workspace.InspectNode(archiveId, reqLevel).ChangeState);
+
+        // A successful edit records exactly one step, and undo returns the node it touched
+        Assert.Null(workspace.SetPropertyValue(archiveId, reqLevel, RepackerPropertyKind.Short, "25", null, null));
+        (string? undoErr, string affected) = workspace.Undo(archiveId);
+        Assert.Null(undoErr);
+        Assert.Equal("Coat/01040000.img", affected);
+        Assert.Equal("10", workspace.InspectNode(archiveId, reqLevel).DisplayValue);
+        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
     }
 
     [Fact]

@@ -341,8 +341,8 @@ internal sealed class RepackerDesktopForm : Form {
                     }
                 }
 
-                (bool ok, string? err, ArchiveSummaryDto? summary) = workspace.SaveArchiveToDisk(ar.ArchiveId, targetPath, ar.Version);
-                if (!ok) {
+                (string? err, ArchiveSummaryDto? summary) = workspace.SaveArchiveToDisk(ar.ArchiveId, targetPath, ar.Version);
+                if (err is not null) {
                     MessageBox.Show(
                         this,
                         $"Failed to save \"{ar.Name}\": {err}",

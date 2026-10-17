@@ -7,12 +7,11 @@ namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 /// </summary>
 internal static class SearchExportRpcHandlers {
     public static void Register(RpcRouter router) {
-        router.Map(RpcMethod.SearchQuery, SearchQuery);
-        router.Map(RpcMethod.NodeBatchExport, NodeBatchExport);
+        router.Map<SearchNodesRequest>(RpcMethod.SearchQuery, Search);
+        router.Map<BatchExportRequest>(RpcMethod.NodeBatchExport, BatchExport);
     }
 
-    private static (bool Ok, object? Data) SearchQuery(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        SearchNodesRequest req = RpcSerializer.DecodeParams<SearchNodesRequest>(rawParams);
+    private static SearchResponseDto Search(RpcContext ctx, SearchNodesRequest req) {
         SearchResultItemDto[] hits = ctx.Workspace.Search(new SearchQueryDto {
             ArchiveId = req.ArchiveId,
             Query = req.Query,
@@ -22,24 +21,13 @@ internal static class SearchExportRpcHandlers {
             ExactMatch = req.ExactMatch,
             MaxResults = req.MaxResults > 0 ? req.MaxResults : 250,
         });
-        return (true, new SearchResponseDto(true, null, hits));
+        return new SearchResponseDto(true, null, hits);
     }
 
-    private static (bool Ok, object? Data) NodeBatchExport(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        BatchExportRequest req = RpcSerializer.DecodeParams<BatchExportRequest>(rawParams);
+    private static RpcOperationResponse BatchExport(RpcContext ctx, BatchExportRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string path = ctx.ResolvePath(req.Path);
-        (bool ok, string? err, int count) = ctx.Workspace.BatchExportToDirectory(
-            archiveId,
-            path,
-            req.OutputDirectory ?? string.Empty,
-            req.Mode);
-        return (ok, new RpcOperationResponse(
-            Ok: ok,
-            Error: err,
-            ArchiveId: archiveId,
-            Path: path,
-            Count: count,
-            Status: ctx.BuildStatus()));
+        (string? error, int count) = ctx.Workspace.BatchExportToDirectory(archiveId, path, req.OutputDirectory ?? string.Empty, req.Mode);
+        return ctx.Result(error, archiveId, path, count);
     }
 }

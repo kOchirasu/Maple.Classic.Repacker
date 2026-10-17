@@ -1,5 +1,3 @@
-using Maple.Classic.Repacker.Engine.Models;
-
 namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 
 /// <summary>
@@ -8,56 +6,40 @@ namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 /// </summary>
 internal static class NativeDialogRpcHandlers {
     public static void Register(RpcRouter router) {
-        router.Map(RpcMethod.WorkspaceBrowseFiles, WorkspaceBrowseFiles);
-        router.Map(RpcMethod.WorkspaceBrowseSaveFile, WorkspaceBrowseSaveFile);
-        router.Map(RpcMethod.WorkspaceBrowseDirectory, WorkspaceBrowseDirectory);
+        router.Map(RpcMethod.WorkspaceBrowseFiles, BrowseFiles);
+        router.Map<BrowseSaveFileRequest>(RpcMethod.WorkspaceBrowseSaveFile, BrowseSaveFile);
+        router.Map(RpcMethod.WorkspaceBrowseDirectory, BrowseDirectory);
     }
 
-    private static (bool Ok, object? Data) WorkspaceBrowseFiles(RpcContext ctx, ReadOnlyMemory<byte> _) {
+    private static readonly RpcOperationResponse Cancelled = new(Ok: true, Cancelled: true);
+
+    private static RpcOperationResponse BrowseFiles(RpcContext ctx) {
 #if WINDOWS
-        string? initialDir = ctx.Settings.GetRecentPaths().FirstOrDefault();
-        string[]? filePaths = WindowsDesktopShell.PickOpenWzFiles(initialDir);
-        if (filePaths is not { Length: > 0 }) {
-            return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
-        }
-        return (true, new RpcOperationResponse(
-            Ok: true,
-            FilePaths: filePaths));
+        string[]? filePaths = WindowsDesktopShell.PickOpenWzFiles(ctx.Settings.GetRecentPaths().FirstOrDefault());
+        return filePaths is { Length: > 0 } ? new RpcOperationResponse(Ok: true, FilePaths: filePaths) : Cancelled;
 #else
-        return (false, new RpcOperationResponse(false, "Native file dialog is not supported on this platform."));
+        return RpcContext.Fail("Native file dialog is not supported on this platform.");
 #endif
     }
 
-    private static (bool Ok, object? Data) WorkspaceBrowseSaveFile(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
+    private static RpcOperationResponse BrowseSaveFile(RpcContext ctx, BrowseSaveFileRequest req) {
 #if WINDOWS
-        BrowseSaveFileRequest req = RpcSerializer.DecodeParams<BrowseSaveFileRequest>(rawParams);
         string? initialDir = !string.IsNullOrWhiteSpace(req.InitialDirectory)
             ? req.InitialDirectory
             : ctx.Settings.GetRecentPaths().FirstOrDefault();
         string? savedPath = WindowsDesktopShell.PickSaveWzFile(req.DefaultFileName, initialDir);
-        if (string.IsNullOrWhiteSpace(savedPath)) {
-            return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
-        }
-        return (true, new RpcOperationResponse(
-            Ok: true,
-            Path: savedPath));
+        return string.IsNullOrWhiteSpace(savedPath) ? Cancelled : new RpcOperationResponse(Ok: true, Path: savedPath);
 #else
-        return (false, new RpcOperationResponse(false, "Native save dialog is not supported on this platform."));
+        return RpcContext.Fail("Native save dialog is not supported on this platform.");
 #endif
     }
 
-    private static (bool Ok, object? Data) WorkspaceBrowseDirectory(RpcContext ctx, ReadOnlyMemory<byte> _) {
+    private static RpcOperationResponse BrowseDirectory(RpcContext ctx) {
 #if WINDOWS
-        string? initialDir = ctx.Settings.GetRecentPaths().FirstOrDefault();
-        string? directoryPath = WindowsDesktopShell.PickOpenDirectory(initialDir);
-        if (string.IsNullOrWhiteSpace(directoryPath)) {
-            return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
-        }
-        return (true, new RpcOperationResponse(
-            Ok: true,
-            Path: directoryPath));
+        string? directoryPath = WindowsDesktopShell.PickOpenDirectory(ctx.Settings.GetRecentPaths().FirstOrDefault());
+        return string.IsNullOrWhiteSpace(directoryPath) ? Cancelled : new RpcOperationResponse(Ok: true, Path: directoryPath);
 #else
-        return (false, new RpcOperationResponse(false, "Native folder dialog is not supported on this platform."));
+        return RpcContext.Fail("Native folder dialog is not supported on this platform.");
 #endif
     }
 }

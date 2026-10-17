@@ -110,6 +110,11 @@ public enum RepackerLogLevel {
     Error,
 }
 
+/// <summary>Any response DTO that reports success via <c>Ok</c> (the RPC router reads it to build the reply envelope).</summary>
+public interface IResultDto {
+    bool Ok { get; }
+}
+
 public sealed record RepackerLogEntry(
     long Id,
     string Timestamp,
@@ -230,7 +235,7 @@ public sealed record NodeInspectionDto(
     AnimationFrameDto[] AnimationFrames,
     SoundPreviewDto? Sound,
     string? ResolvedUolTargetPath,
-    byte[] RawBinarySlice);
+    byte[] RawBinarySlice) : IResultDto;
 
 public sealed record SearchQueryDto {
     public string? ArchiveId { get; init; }

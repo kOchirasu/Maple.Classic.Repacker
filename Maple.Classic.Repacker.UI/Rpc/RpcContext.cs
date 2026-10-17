@@ -18,20 +18,6 @@ internal sealed class RpcContext(RepackerWorkspace workspace, UserSettingsStore 
         false;
 #endif
 
-    /// <summary>Snapshot of workspace + settings state pushed to clients after state changes.</summary>
-    public WorkspaceStatusPayloadDto BuildStatus() =>
-        new(
-            "status",
-            Workspace.StateVersion,
-            Workspace.SelectedArchiveId,
-            Workspace.SelectedNodePath,
-            Workspace.GetArchiveSummaries(),
-            Workspace.GetClipboardState(),
-            Workspace.GetLogs().ToArray(),
-            Settings.GetUiState(),
-            Settings.GetRecentPaths(),
-            SupportsNativeDialogs);
-
     /// <summary>Falls back to the currently selected archive when the request omits an archive id.</summary>
     public string ResolveArchiveId(string? requested) =>
         requested ?? Workspace.SelectedArchiveId ?? string.Empty;
@@ -39,4 +25,13 @@ internal sealed class RpcContext(RepackerWorkspace workspace, UserSettingsStore 
     /// <summary>Falls back to the currently selected node path when the request omits a path.</summary>
     public string ResolvePath(string? requested) =>
         requested ?? Workspace.SelectedNodePath;
+
+    /// <summary>
+    /// Standard reply for a workspace operation: success when <paramref name="error"/> is null. State changes are not
+    /// included; the connection pushes a status delta to the client right before every reply.
+    /// </summary>
+    public RpcOperationResponse Result(string? error, string? archiveId = null, string? path = null, int? count = null) =>
+        new(Ok: error is null, Error: error, ArchiveId: archiveId, Path: path, Count: count);
+
+    public static RpcOperationResponse Fail(string error) => new(Ok: false, Error: error);
 }

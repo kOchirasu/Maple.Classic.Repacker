@@ -112,9 +112,9 @@ public class Program {
             RepackerExportFormat parsedFormat = Enum.TryParse<RepackerExportFormat>(formatRaw, ignoreCase: true, out RepackerExportFormat f)
                 ? f
                 : RepackerExportFormat.Auto;
-            (bool ok, string? error, string fileName, string mimeType, byte[] data) =
+            (string? error, string fileName, string mimeType, byte[] data) =
                 workspace.ExportNode(archiveId, path, parsedFormat);
-            if (!ok) {
+            if (error is not null) {
                 return Results.BadRequest(new { ok = false, error });
             }
             return Results.File(data, mimeType, fileName);
@@ -135,12 +135,11 @@ public class Program {
                         continue;
                     }
 
-                    byte[] payload = RpcSerializer.Encode(rpcContext.BuildStatus());
                     foreach (KeyValuePair<Guid, WsClientConnection> kvp in wsClients) {
                         WsClientConnection conn = kvp.Value;
                         if (conn.Socket.State == WebSocketState.Open) {
                             try {
-                                await conn.SendBinaryAsync(payload, broadcastCts.Token).ConfigureAwait(false);
+                                await conn.SendStatusDeltaAsync(rpcContext, broadcastCts.Token).ConfigureAwait(false);
                             } catch {
                                 if (conn.Socket.State != WebSocketState.Open && wsClients.TryRemove(kvp.Key, out WsClientConnection? removed)) {
                                     removed.Dispose();
@@ -169,8 +168,8 @@ public class Program {
             var id = Guid.NewGuid();
 
             try {
-                byte[] initial = RpcSerializer.Encode(rpcContext.BuildStatus());
-                await conn.SendBinaryAsync(initial, ctx.RequestAborted).ConfigureAwait(false);
+                // First status for a new connection is a full snapshot
+                await conn.SendStatusDeltaAsync(rpcContext, ctx.RequestAborted).ConfigureAwait(false);
                 wsClients[id] = conn;
 
                 byte[] buf = new byte[65536];
@@ -202,6 +201,8 @@ public class Program {
                             if (rpcId > 0 && !string.IsNullOrWhiteSpace(method)) {
                                 (bool ok, object? data) = rpcRouter.Dispatch(method, rawParams);
                                 byte[] replyBytes = RpcSerializer.Encode(new RpcResponseEnvelope("rpc", rpcId, ok, data));
+                                // Push this operation's state changes first, so the client is up to date when the reply resolves
+                                await conn.SendStatusDeltaAsync(rpcContext, ctx.RequestAborted).ConfigureAwait(false);
                                 await conn.SendBinaryAsync(replyBytes, ctx.RequestAborted).ConfigureAwait(false);
                             }
                         } catch {
@@ -372,15 +373,32 @@ public class Program {
     private sealed class WsClientConnection(WebSocket socket) : IDisposable {
         public WebSocket Socket { get; } = socket;
         private readonly SemaphoreSlim sendLock = new(1, 1);
+        private readonly StatusDeltaTracker statusTracker = new();
 
         public async Task SendBinaryAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) {
             await sendLock.WaitAsync(ct).ConfigureAwait(false);
             try {
-                if (Socket.State == WebSocketState.Open) {
-                    await Socket.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                await SendUnlockedAsync(payload, ct).ConfigureAwait(false);
+            } finally {
+                sendLock.Release();
+            }
+        }
+
+        /// <summary>Sends whatever changed since this client's last status (nothing if it is up to date).</summary>
+        public async Task SendStatusDeltaAsync(RpcContext rpcContext, CancellationToken ct) {
+            await sendLock.WaitAsync(ct).ConfigureAwait(false);
+            try {
+                if (statusTracker.NextDelta(rpcContext) is { } delta) {
+                    await SendUnlockedAsync(RpcSerializer.Encode(delta), ct).ConfigureAwait(false);
                 }
             } finally {
                 sendLock.Release();
+            }
+        }
+
+        private async Task SendUnlockedAsync(ReadOnlyMemory<byte> payload, CancellationToken ct) {
+            if (Socket.State == WebSocketState.Open) {
+                await Socket.SendAsync(payload, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
             }
         }
 

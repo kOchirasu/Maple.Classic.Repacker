@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Maple.Classic.File.IO;
 using Maple.Classic.Repacker.Engine.Audio;
@@ -32,6 +33,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
     private long stateVersion = 1;
     private long nextLogId = 1;
+    private long logsEpoch;
     private int nextArchiveSeq = 1;
 
     private ClipboardEntry? clipboard;
@@ -88,9 +90,20 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Log entries newer than <paramref name="afterId"/>, plus the current clear-epoch. The epoch increases every time
+    /// the log is cleared, so a consumer that tracks it knows when to drop the entries it already has.
+    /// </summary>
+    public (long Epoch, RepackerLogEntry[] Entries) GetLogsSince(long afterId) {
+        lock (syncLock) {
+            return (logsEpoch, [.. logs.Where(l => l.Id > afterId)]);
+        }
+    }
+
     public void ClearLogs() {
         lock (syncLock) {
             logs.Clear();
+            logsEpoch++;
         }
         NotifyStateChanged();
     }
@@ -103,17 +116,16 @@ public sealed class RepackerWorkspace : IDisposable {
 
     public ClipboardStateDto GetClipboardState() {
         lock (syncLock) {
-            if (clipboard is null) {
-                return new ClipboardStateDto(false, null, null, null, RepackerNodeKind.Property, RepackerPropertyKind.None);
-            }
-            return new ClipboardStateDto(
-                true,
-                clipboard.SourceArchiveId,
-                clipboard.SourcePath,
-                clipboard.Name,
-                clipboard.NodeKind,
-                clipboard.PropertyKind);
+            return GetClipboardStateUnsafe();
         }
+    }
+
+    /// <summary>Snapshot of the clipboard. Caller must hold <see cref="syncLock"/>.</summary>
+    private ClipboardStateDto GetClipboardStateUnsafe() {
+        AssertLockHeld();
+        return clipboard is null
+            ? new ClipboardStateDto(false, null, null, null, RepackerNodeKind.Property, RepackerPropertyKind.None)
+            : new ClipboardStateDto(true, clipboard.SourceArchiveId, clipboard.SourcePath, clipboard.Name, clipboard.NodeKind, clipboard.PropertyKind);
     }
 
     public void SelectNode(string? archiveId, string? path) {
@@ -137,59 +149,32 @@ public sealed class RepackerWorkspace : IDisposable {
         string fileName = Path.GetFileName(fullPath);
 
         lock (syncLock) {
+            // Re-opening a file that is open (or linked by an open archive): reload that session in place
             ArchiveSession? existing = FindExistingOrLinkedSessionByPathUnsafe(fullPath);
             if (existing is not null) {
-                int idx = archives.IndexOf(existing);
                 string reloadPath = ArchivePathResolver.ChoosePreferredRootArchivePath(existing.FilePath, fullPath);
-                string reloadName = Path.GetFileName(reloadPath);
-                WzArchive reloadWz = string.Equals(reloadPath, fullPath, StringComparison.OrdinalIgnoreCase)
-                    ? wz
-                    : new WzArchive(reloadPath, version);
-                if (!ReferenceEquals(reloadWz, wz)) {
-                    wz.Dispose();
-                }
-
-                existing.Dispose();
-                var replacement = new ArchiveSession(existing.ArchiveId, reloadName, reloadPath, reloadWz, version);
-                archives[idx] = replacement;
-                RemoveSubsumedSessionsUnsafe(replacement, idx);
-                SelectedArchiveId = replacement.ArchiveId;
-                SelectedNodePath = string.Empty;
-                string linkedNote = replacement.LinkedArchiveCount > 0 ? $", +{replacement.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
-                AppendLogUnsafe($"Reloaded archive \"{reloadName}\" (v{reloadWz.Version}, encVer {reloadWz.Header.EncVer}{linkedNote}) from {reloadPath}.", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return replacement.ToSummaryDto();
+                WzArchive reloadWz = ReuseOrOpenArchive(wz, fullPath, reloadPath, version);
+                return ReplaceSessionUnsafe(
+                    archives.IndexOf(existing),
+                    () => new ArchiveSession(existing.ArchiveId, Path.GetFileName(reloadPath), reloadPath, reloadWz, version),
+                    s => $"Reloaded archive \"{s.Name}\" (v{reloadWz.Version}, encVer {reloadWz.Header.EncVer}{LinkedNote(s)}) from {reloadPath}.");
             }
 
-            string id = $"wz_{nextArchiveSeq++}";
-            var session = new ArchiveSession(id, fileName, fullPath, wz, version);
-            ArchiveSession? subsumed = archives.Find(a =>
-                !string.IsNullOrEmpty(a.FilePath) &&
-                session.HasLinkedOrSubdirectoryFile(a.FilePath));
+            var session = new ArchiveSession($"wz_{nextArchiveSeq++}", fileName, fullPath, wz, version);
+
+            // The new archive links an already-open one (e.g. opening Base.wz while Character.wz is open): take its slot
+            ArchiveSession? subsumed = archives.Find(a => !string.IsNullOrEmpty(a.FilePath) && session.HasLinkedOrSubdirectoryFile(a.FilePath));
             if (subsumed is not null) {
-                int idx = archives.IndexOf(subsumed);
-                string reusedId = subsumed.ArchiveId;
-                subsumed.Dispose();
                 session.Dispose();
-                var reopenWz = new WzArchive(fullPath, version);
-                var replacement = new ArchiveSession(reusedId, fileName, fullPath, reopenWz, version);
-                archives[idx] = replacement;
-                RemoveSubsumedSessionsUnsafe(replacement, idx);
-                SelectedArchiveId = replacement.ArchiveId;
-                SelectedNodePath = string.Empty;
-                string linkedNote = replacement.LinkedArchiveCount > 0 ? $", +{replacement.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
-                AppendLogUnsafe($"Reloaded archive \"{fileName}\" (v{reopenWz.Version}, encVer {reopenWz.Header.EncVer}{linkedNote}) from {fullPath}.", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return replacement.ToSummaryDto();
+                return ReplaceSessionUnsafe(
+                    archives.IndexOf(subsumed),
+                    () => new ArchiveSession(subsumed.ArchiveId, fileName, fullPath, new WzArchive(fullPath, version), version),
+                    s => $"Reloaded archive \"{fileName}\" (v{s.Archive.Version}, encVer {s.Archive.Header.EncVer}{LinkedNote(s)}) from {fullPath}.");
             }
 
-            archives.Add(session);
-            SelectedArchiveId = id;
-            SelectedNodePath = string.Empty;
-            string openLinkedNote = session.LinkedArchiveCount > 0 ? $", +{session.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
-            AppendLogUnsafe($"Opened archive \"{fileName}\" (v{wz.Version}, encVer {wz.Header.EncVer}{openLinkedNote}) from {fullPath}.", RepackerLogLevel.Success);
-            NotifyStateChanged();
-            return session.ToSummaryDto();
+            return AddSessionUnsafe(
+                session,
+                $"Opened archive \"{fileName}\" (v{wz.Version}, encVer {wz.Header.EncVer}{LinkedNote(session)}) from {fullPath}.");
         }
     }
 
@@ -233,43 +218,21 @@ public sealed class RepackerWorkspace : IDisposable {
                         StringComparison.OrdinalIgnoreCase));
 
             if (existing is not null) {
-                int idx = archives.IndexOf(existing);
                 string reloadPath = !string.IsNullOrWhiteSpace(resolvedPath)
                     ? ArchivePathResolver.ChoosePreferredRootArchivePath(existing.FilePath, resolvedPath)
                     : string.Empty;
-                string reloadName = !string.IsNullOrWhiteSpace(reloadPath)
-                    ? Path.GetFileName(reloadPath)
-                    : cleanName;
-                WzArchive reloadWz = !string.IsNullOrWhiteSpace(reloadPath) &&
-                                     !string.Equals(reloadPath, resolvedPath, StringComparison.OrdinalIgnoreCase) &&
-                                     System.IO.File.Exists(reloadPath)
-                    ? new WzArchive(reloadPath, version)
+                string reloadName = !string.IsNullOrWhiteSpace(reloadPath) ? Path.GetFileName(reloadPath) : cleanName;
+                WzArchive reloadWz = !string.IsNullOrWhiteSpace(reloadPath) && System.IO.File.Exists(reloadPath)
+                    ? ReuseOrOpenArchive(wz, resolvedPath, reloadPath, version)
                     : wz;
-                if (!ReferenceEquals(reloadWz, wz)) {
-                    wz.Dispose();
-                }
-
-                existing.Dispose();
-                var replacement = new ArchiveSession(existing.ArchiveId, reloadName, reloadPath, reloadWz, version);
-                archives[idx] = replacement;
-                RemoveSubsumedSessionsUnsafe(replacement, idx);
-                SelectedArchiveId = replacement.ArchiveId;
-                SelectedNodePath = string.Empty;
-                string linkedNote = replacement.LinkedArchiveCount > 0 ? $", +{replacement.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
-                AppendLogUnsafe($"Reloaded archive \"{reloadName}\" ({data.Length:N0} bytes, v{reloadWz.Version}{linkedNote}).", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return replacement.ToSummaryDto();
+                return ReplaceSessionUnsafe(
+                    archives.IndexOf(existing),
+                    () => new ArchiveSession(existing.ArchiveId, reloadName, reloadPath, reloadWz, version),
+                    s => $"Reloaded archive \"{reloadName}\" ({data.Length:N0} bytes, v{reloadWz.Version}{LinkedNote(s)}).");
             }
 
-            string id = $"wz_{nextArchiveSeq++}";
-            var session = new ArchiveSession(id, cleanName, resolvedPath, wz, version);
-            archives.Add(session);
-            SelectedArchiveId = id;
-            SelectedNodePath = string.Empty;
-            string openLinkedNote = session.LinkedArchiveCount > 0 ? $", +{session.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
-            AppendLogUnsafe($"Loaded archive \"{cleanName}\" ({data.Length:N0} bytes, v{wz.Version}{openLinkedNote}).", RepackerLogLevel.Success);
-            NotifyStateChanged();
-            return session.ToSummaryDto();
+            var session = new ArchiveSession($"wz_{nextArchiveSeq++}", cleanName, resolvedPath, wz, version);
+            return AddSessionUnsafe(session, $"Loaded archive \"{cleanName}\" ({data.Length:N0} bytes, v{wz.Version}{LinkedNote(session)}).");
         }
     }
 
@@ -302,6 +265,48 @@ public sealed class RepackerWorkspace : IDisposable {
             }
         }
     }
+
+    /// <summary>
+    /// Disposes the session at <paramref name="index"/> and replaces it with the one built by <paramref name="create"/>
+    /// (created only after disposal, so its files are no longer held open), then drops sessions it now links, selects it
+    /// and logs. Caller must hold <see cref="syncLock"/>.
+    /// </summary>
+    private ArchiveSummaryDto ReplaceSessionUnsafe(int index, Func<ArchiveSession> create, Func<ArchiveSession, string> logMessage) {
+        AssertLockHeld();
+        archives[index].Dispose();
+        ArchiveSession replacement = create();
+        archives[index] = replacement;
+        RemoveSubsumedSessionsUnsafe(replacement, index);
+        return SelectOpenedSessionUnsafe(replacement, logMessage(replacement), RepackerLogLevel.Success);
+    }
+
+    /// <summary>Adds a newly opened session, selects it and logs. Caller must hold <see cref="syncLock"/>.</summary>
+    private ArchiveSummaryDto AddSessionUnsafe(ArchiveSession session, string logMessage, RepackerLogLevel level = RepackerLogLevel.Success) {
+        AssertLockHeld();
+        archives.Add(session);
+        return SelectOpenedSessionUnsafe(session, logMessage, level);
+    }
+
+    private ArchiveSummaryDto SelectOpenedSessionUnsafe(ArchiveSession session, string logMessage, RepackerLogLevel level) {
+        AssertLockHeld();
+        SelectedArchiveId = session.ArchiveId;
+        SelectedNodePath = string.Empty;
+        AppendLogUnsafe(logMessage, level);
+        NotifyStateChanged();
+        return session.ToSummaryDto();
+    }
+
+    /// <summary>Returns <paramref name="opened"/> if it already is <paramref name="targetPath"/>, otherwise disposes it and opens the target.</summary>
+    private static WzArchive ReuseOrOpenArchive(WzArchive opened, string openedPath, string targetPath, ushort? version) {
+        if (string.Equals(targetPath, openedPath, StringComparison.OrdinalIgnoreCase)) {
+            return opened;
+        }
+        opened.Dispose();
+        return new WzArchive(targetPath, version);
+    }
+
+    private static string LinkedNote(ArchiveSession session) =>
+        session.LinkedArchiveCount > 0 ? $", +{session.LinkedArchiveCount} linked .wz file(s)" : string.Empty;
 
     public ArchiveSummaryDto[] OpenDataDirectory(string directoryPath, ushort? version = null) {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
@@ -346,36 +351,24 @@ public sealed class RepackerWorkspace : IDisposable {
         if (!cleanName.EndsWith(".wz", StringComparison.OrdinalIgnoreCase)) {
             cleanName += ".wz";
         }
-        var wz = new WzArchive(version);
 
         lock (syncLock) {
-            string id = $"wz_{nextArchiveSeq++}";
-            var session = new ArchiveSession(id, cleanName, string.Empty, wz) {
+            var session = new ArchiveSession($"wz_{nextArchiveSeq++}", cleanName, string.Empty, new WzArchive(version)) {
                 HasStructureChanges = true,
                 IsUserCreatedArchive = true,
             };
-            archives.Add(session);
-            SelectedArchiveId = id;
-            SelectedNodePath = string.Empty;
-            AppendLogUnsafe($"Created new empty WZ archive \"{cleanName}\" (v{version}).", RepackerLogLevel.Info);
-            NotifyStateChanged();
-            return session.ToSummaryDto();
+            return AddSessionUnsafe(session, $"Created new empty WZ archive \"{cleanName}\" (v{version}).", RepackerLogLevel.Info);
         }
     }
 
-    public (bool Ok, string? Error, ArchiveSummaryDto? Summary) SaveArchiveToDisk(
+    public (string? Error, ArchiveSummaryDto? Summary) SaveArchiveToDisk(
         string archiveId,
         string? targetFilePath = null,
-        ushort? version = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", null);
-            }
-
+        ushort? version = null) =>
+        WithSession<(string? Error, ArchiveSummaryDto? Summary)>(archiveId, static e => (e, null), session => {
             string savePath = !string.IsNullOrWhiteSpace(targetFilePath) ? targetFilePath.Trim() : session.FilePath;
             if (string.IsNullOrWhiteSpace(savePath)) {
-                return (false, "A file path is required to save an in-memory archive to disk.", null);
+                return ("A file path is required to save an in-memory archive to disk.", null);
             }
 
             try {
@@ -390,35 +383,27 @@ public sealed class RepackerWorkspace : IDisposable {
                 session.FilePath = fullPath;
                 session.Name = Path.GetFileName(fullPath);
                 AppendLogUnsafe($"Saved archive \"{session.Name}\" ({bytes.Length:N0} bytes) to {fullPath}.", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, session.ToSummaryDto());
+                return (null, session.ToSummaryDto());
             } catch (Exception ex) {
                 AppendLogUnsafe($"Failed to save \"{session.Name}\": {ex.Message}", RepackerLogLevel.Error);
-                return (false, ex.Message, null);
+                return (ex.Message, null);
             }
-        }
-    }
+        });
 
-    public (bool Ok, string? Error, string FileName, byte[] Data) ExportArchiveBytes(
+    public (string? Error, string FileName, byte[] Data) ExportArchiveBytes(
         string archiveId,
         ushort? version = null,
-        bool commitClean = false) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty, []);
-            }
+        bool commitClean = false) =>
+        WithSession<(string? Error, string FileName, byte[] Data)>(archiveId, static e => (e, string.Empty, []), session => {
             try {
                 byte[] bytes = session.BuildArchiveBytes(version, commitCleanState: commitClean);
                 AppendLogUnsafe($"Repacked archive \"{session.Name}\" ({bytes.Length:N0} bytes, v{version ?? session.Archive.Version}).", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, session.Name, bytes);
+                return (null, session.Name, bytes);
             } catch (Exception ex) {
                 AppendLogUnsafe($"Failed to repack \"{session.Name}\": {ex.Message}", RepackerLogLevel.Error);
-                return (false, ex.Message, string.Empty, []);
+                return (ex.Message, string.Empty, []);
             }
-        }
-    }
+        });
 
     public bool CloseArchive(string archiveId) {
         lock (syncLock) {
@@ -464,46 +449,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     NotifyStateChanged();
                 }
 
-                bool parentDeleted = session.IsVirtualPathDeleted(norm);
-                var result = new List<TreeNodeDto>(dirNode.Children.Count);
-                foreach (VirtualFsNode child in dirNode.Children) {
-                    string childPath = string.IsNullOrEmpty(norm) ? child.Name : $"{norm}/{child.Name}";
-                    bool childDeleted = parentDeleted || child.IsDeleted;
-                    if (child.IsDir) {
-                        (int d, int i) = ArchiveSession.CountVirtualRecursive(child);
-                        RepackerChangeState dirState = childDeleted
-                            ? RepackerChangeState.Deleted
-                            : session.GetDirectoryChangeState(childPath, child);
-                        result.Add(new TreeNodeDto(
-                            session.ArchiveId,
-                            childPath,
-                            child.Name,
-                            RepackerNodeKind.Directory,
-                            RepackerPropertyKind.None,
-                            $"{d + i} items",
-                            RepackerNodeKind.Directory.GetShortName(),
-                            child.Children.Count > 0,
-                            child.Children.Count,
-                            dirState,
-                            0));
-                    } else {
-                        int sizeBytes = session.GetImageSize(childPath);
-                        RepackerChangeState imgState = session.GetImageChangeState(childPath, childDeleted);
-                        result.Add(new TreeNodeDto(
-                            session.ArchiveId,
-                            childPath,
-                            child.Name,
-                            RepackerNodeKind.Image,
-                            RepackerPropertyKind.Object,
-                            FormatByteSize(sizeBytes),
-                            RepackerNodeKind.Image.GetShortName(),
-                            true,
-                            0,
-                            imgState,
-                            sizeBytes));
-                    }
-                }
-                return [.. result];
+                return [.. DescribeDirectoryChildren(session, norm, dirNode).Select(c => c.ToTreeNode(session.ArchiveId))];
             }
 
             // 2. Inside an .img property tree
@@ -517,34 +463,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     return [];
                 }
 
-                bool effectiveParentDeleted = imgDeleted || targetDeleted;
-
-                if (target is WzValue.Convex(var convexItems)) {
-                    var convexNodes = new List<TreeNodeDto>(convexItems.Count);
-                    for (int i = 0; i < convexItems.Count; i++) {
-                        WzValue item = convexItems[i];
-                        string itemName = i.ToString(CultureInfo.InvariantCulture);
-                        string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
-                        string itemPath = $"{imgPath}/{itemSubPath}";
-                        RepackerChangeState itemState = EvaluatePropertyChangeState(session, imgPath, itemSubPath, item, effectiveParentDeleted);
-                        convexNodes.Add(BuildPropertyTreeNodeDto(session, imgPath, itemSubPath, itemPath, itemName, item, itemState));
-                    }
-                    return [.. convexNodes];
-                }
-
-                List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> mergedProps =
-                    BuildMergedChildProperties(session, imgPath, subPath, target, effectiveParentDeleted);
-                if (mergedProps.Count == 0) {
-                    return [];
-                }
-
-                var propNodes = new List<TreeNodeDto>(mergedProps.Count);
-                foreach ((string propName, string propSubPath, WzValue propVal, bool propDeleted) in mergedProps) {
-                    string propPath = $"{imgPath}/{propSubPath}";
-                    RepackerChangeState propState = EvaluatePropertyChangeState(session, imgPath, propSubPath, propVal, propDeleted);
-                    propNodes.Add(BuildPropertyTreeNodeDto(session, imgPath, propSubPath, propPath, propName, propVal, propState));
-                }
-                return [.. propNodes];
+                return [.. DescribePropertyChildren(session, imgPath, subPath, target, imgDeleted || targetDeleted).Select(c => c.ToTreeNode(session.ArchiveId))];
             } catch {
                 return [];
             }
@@ -582,40 +501,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 string displayName = isRoot ? session.Name : dirNode.Name;
                 (int dCount, int iCount) = ArchiveSession.CountVirtualRecursive(dirNode);
 
-                var rows = new List<SubPropertyRowDto>(dirNode.Children.Count);
-                foreach (VirtualFsNode c in dirNode.Children) {
-                    string cPath = isRoot ? c.Name : $"{norm}/{c.Name}";
-                    bool cDeleted = isDirDeleted || c.IsDeleted;
-                    if (c.IsDir) {
-                        (int cd, int ci) = ArchiveSession.CountVirtualRecursive(c);
-                        RepackerChangeState cState = cDeleted
-                            ? RepackerChangeState.Deleted
-                            : session.GetDirectoryChangeState(cPath, c);
-                        rows.Add(new SubPropertyRowDto(
-                            c.Name,
-                            cPath,
-                            RepackerNodeKind.Directory,
-                            RepackerPropertyKind.None,
-                            RepackerNodeKind.Directory.GetShortName(),
-                            $"{cd} dirs, {ci} images",
-                            c.Children.Count,
-                            0,
-                            cState));
-                    } else {
-                        int sz = session.GetImageSize(cPath);
-                        RepackerChangeState cState = session.GetImageChangeState(cPath, cDeleted);
-                        rows.Add(new SubPropertyRowDto(
-                            c.Name,
-                            cPath,
-                            RepackerNodeKind.Image,
-                            RepackerPropertyKind.Object,
-                            RepackerNodeKind.Image.GetShortName(),
-                            FormatByteSize(sz),
-                            0,
-                            sz,
-                            cState));
-                    }
-                }
+                SubPropertyRowDto[] rows = [.. DescribeDirectoryChildren(session, norm, dirNode).Select(static c => c.ToChildRow())];
 
                 string summaryJson = $$"""
                 {
@@ -660,10 +546,10 @@ public sealed class RepackerWorkspace : IDisposable {
                     dirNode.Children.Count,
                     0,
                     dirChangeState,
-                    session.CanUndo(norm),
-                    session.CanRedo(norm),
+                    session.CanUndo,
+                    session.CanRedo,
                     summaryJson,
-                    [.. rows],
+                    rows,
                     null,
                     [],
                     null,
@@ -699,7 +585,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 double? numFloat = target is WzValue.Float or WzValue.Double ? target.AsDouble() : null;
                 VectorPointDto? vecDto = target is WzValue.Vector(var vx, var vy) ? new VectorPointDto(vx, vy) : null;
 
-                SubPropertyRowDto[] childRows = BuildChildRows(session, imgPath, subPath, target, isNodeDeleted);
+                SubPropertyRowDto[] childRows = ChildRows(session, imgPath, subPath, target, isNodeDeleted);
                 int ownChildCount = childRows.Length;
                 if (ownChildCount == 0 && !isImageRoot && target is not WzValue.Object and not WzValue.Convex) {
                     int lastSlash = subPath.LastIndexOf('/');
@@ -708,7 +594,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         ? (imgRoot, imgDeleted)
                         : session.ResolvePropertyOrDeleted(imgPath, imgRoot, parentSubPath);
                     if (parentVal is not null) {
-                        childRows = BuildChildRows(session, imgPath, parentSubPath, parentVal, imgDeleted || parentDel);
+                        childRows = ChildRows(session, imgPath, parentSubPath, parentVal, imgDeleted || parentDel);
                     }
                 }
 
@@ -841,8 +727,8 @@ public sealed class RepackerWorkspace : IDisposable {
                     ownChildCount,
                     sizeBytes,
                     nodeChangeState,
-                    session.CanUndo(imgPath),
-                    session.CanRedo(imgPath),
+                    session.CanUndo,
+                    session.CanRedo,
                     jsonPreview,
                     childRows,
                     canvasDto,
@@ -856,67 +742,49 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
+    private static SubPropertyRowDto[] ChildRows(ArchiveSession session, string imgPath, string subPath, WzValue target, bool parentDeleted) =>
+        [.. DescribePropertyChildren(session, imgPath, subPath, target, parentDeleted).Select(static c => c.ToChildRow())];
+
     // -------------------------------------------------------------------------
     // Property & Node CRUD Operations
     // -------------------------------------------------------------------------
 
-    public (bool Ok, string? Error) SetPropertyValue(
+    public string? SetPropertyValue(
         string archiveId,
         string path,
         RepackerPropertyKind kind,
         string? rawValue,
         int? vecX = null,
-        int? vecY = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
+        int? vecY = null) =>
+        WithSession(archiveId, session => {
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, path, "Cannot set primitive value on an archive, directory, or image root.");
+            if (error is not null) {
+                return error;
             }
 
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null || string.IsNullOrEmpty(subPath)) {
-                return (false, "Cannot set primitive value on an archive, directory, or image root.");
-            }
-
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue? existing = ResolvePropertyNode(imgRoot, subPath);
-                if (existing is null) {
-                    return (false, $"Property \"{subPath}\" not found.");
-                }
-
-                session.RecordUndoSnapshot(imgPath);
-
-                // Special handling when editing Canvas metadata (origin / delay / z)
-                if (existing is WzValue.Canvas canvas && kind == RepackerPropertyKind.Canvas) {
+            // Editing Canvas metadata (origin / delay) keeps the pixel data
+            if (target.Value is WzValue.Canvas canvas && kind == RepackerPropertyKind.Canvas) {
+                return EditImage(session, target.ImagePath, () => {
                     if (vecX.HasValue && vecY.HasValue) {
                         canvas["origin"] = new WzValue.Vector(vecX.Value, vecY.Value);
                     }
                     if (!string.IsNullOrWhiteSpace(rawValue) && int.TryParse(rawValue, out int delayVal)) {
                         canvas["delay"] = new WzValue.Int(delayVal);
                     }
-                    session.MarkImageModified(imgPath);
-                    AppendLogUnsafe($"Updated canvas properties at \"{path}\".", RepackerLogLevel.Info);
-                    NotifyStateChanged();
-                    return (true, null);
-                }
-
-                WzValue newVal = CreatePrimitiveOrStructuredValue(kind, rawValue, vecX, vecY, existing);
-                if (!TryReplacePropertyNode(imgRoot, subPath, newVal)) {
-                    return (false, $"Failed to update property at \"{subPath}\".");
-                }
-
-                session.MarkImageModified(imgPath);
-                AppendLogUnsafe($"Updated \"{path}\" ({kind}) = {DescribeWzValue(newVal).DisplayValue}.", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null);
-            } catch (Exception ex) {
-                return (false, ex.Message);
+                    return null;
+                }, () => $"Updated canvas properties at \"{path}\".", RepackerLogLevel.Info);
             }
-        }
-    }
 
-    public (bool Ok, string? Error, string CreatedPath) AddProperty(
+            WzValue newVal = CreatePrimitiveOrStructuredValue(kind, rawValue, vecX, vecY, target.Value);
+            return EditImage(
+                session,
+                target.ImagePath,
+                () => TryReplacePropertyNode(target.ImageRoot, target.SubPath, newVal) ? null : $"Failed to update property at \"{target.SubPath}\".",
+                () => $"Updated \"{path}\" ({kind}) = {DescribeWzValue(newVal).DisplayValue}.");
+        });
+
+    public (string? Error, string Path) AddProperty(
         string archiveId,
         string parentPath,
         string name,
@@ -925,186 +793,91 @@ public sealed class RepackerWorkspace : IDisposable {
         int? vecX = null,
         int? vecY = null,
         byte[]? binaryPayload = null,
-        WzCanvasFormat? canvasFormat = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+        WzCanvasFormat? canvasFormat = null) =>
+        WithSessionPath(archiveId, session => {
             string cleanName = name.Trim().Trim('/');
             if (string.IsNullOrEmpty(cleanName)) {
-                return (false, "Property name is required.", string.Empty);
+                return ("Property name is required.", string.Empty);
             }
 
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(parentPath);
-            if (imgPath is null) {
-                return (false, "Select an .img file or property inside an .img file to add a property.", string.Empty);
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, parentPath, "Select an .img file or property inside an .img file to add a property.", allowImageRoot: true);
+            if (error is not null) {
+                return (error, string.Empty);
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue? targetParent = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
-                string effectiveSubPath = subPath;
+            // A leaf property (e.g. Int/String) is selected: add the new property as its sibling
+            WzValue? targetParent = target.Value;
+            string effectiveSubPath = target.SubPath;
+            if (targetParent is not WzValue.Object and not WzValue.Canvas and not WzValue.Convex) {
+                effectiveSubPath = ParentOf(target.SubPath);
+                targetParent = string.IsNullOrEmpty(effectiveSubPath) ? target.ImageRoot : ResolvePropertyNode(target.ImageRoot, effectiveSubPath);
+            }
+            if (targetParent is null) {
+                return ($"Target parent \"{parentPath}\" not found.", string.Empty);
+            }
 
-                // If user selected a leaf property (e.g., Int/String), add as a sibling under its parent!
-                if (targetParent is not null && targetParent is not WzValue.Object and not WzValue.Canvas and not WzValue.Convex) {
-                    int lastSlash = subPath.LastIndexOf('/');
-                    effectiveSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-                    targetParent = string.IsNullOrEmpty(effectiveSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, effectiveSubPath);
-                }
-
-                if (targetParent is null) {
-                    return (false, $"Target parent \"{parentPath}\" not found.", string.Empty);
-                }
-
-                session.RecordUndoSnapshot(imgPath);
-
-                WzValue newVal;
-                if (kind == RepackerPropertyKind.Canvas) {
-                    WzCanvasFormat fmt = canvasFormat ?? WzCanvasFormat.Bgra8888;
-                    if (binaryPayload is { Length: > 0 }) {
-                        (int w, int h, byte[] comp) = WzCanvasCodec.EncodePngToCanvasPayload(binaryPayload, fmt);
-                        newVal = new WzValue.Canvas(
-                            w,
-                            h,
-                            (int) fmt,
-                            comp,
-                            [new WzProperty("origin", (vecX ?? w / 2, vecY ?? h))]);
-                    } else {
-                        int w = 32, h = 32;
-                        byte[] blankRgba = new byte[w * h * 4];
-                        byte[] comp = WzCanvasCodec.EncodeFromRgba(w, h, fmt, blankRgba);
-                        newVal = new WzValue.Canvas(
-                            w,
-                            h,
-                            (int) fmt,
-                            comp,
-                            [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
-                    }
-                } else if (kind == RepackerPropertyKind.Sound) {
-                    newVal = WzSoundCodec.CreateFromAudioBytes(binaryPayload is { Length: > 0 } ? binaryPayload : []);
-                } else {
-                    newVal = CreatePrimitiveOrStructuredValue(kind, rawValue, vecX, vecY, null);
-                }
-
-                string createdSubPath = string.IsNullOrEmpty(effectiveSubPath) ? cleanName : $"{effectiveSubPath}/{cleanName}";
+            WzValue newVal = CreateNewPropertyValue(kind, rawValue, vecX, vecY, binaryPayload, canvasFormat);
+            string createdSubPath = JoinPath(effectiveSubPath, cleanName);
+            string? editError = EditImage(session, target.ImagePath, () => {
                 if (targetParent is WzValue.Convex convex) {
                     convex.Items.Add(newVal);
-                    createdSubPath = string.IsNullOrEmpty(effectiveSubPath)
-                        ? $"{convex.Items.Count - 1}"
-                        : $"{effectiveSubPath}/{convex.Items.Count - 1}";
+                    createdSubPath = JoinPath(effectiveSubPath, (convex.Items.Count - 1).ToString(CultureInfo.InvariantCulture));
                 } else {
-                    imgRoot.Set(createdSubPath, newVal);
+                    target.ImageRoot.Set(createdSubPath, newVal);
                 }
+                return null;
+            }, () => $"Added {kind} property \"{cleanName}\" at \"{target.ImagePath}/{createdSubPath}\".");
+            return Selected(editError, $"{target.ImagePath}/{createdSubPath}");
+        });
 
-                string fullCreatedPath = $"{imgPath}/{createdSubPath}";
-                session.MarkImageModified(imgPath);
-                SelectedNodePath = fullCreatedPath;
-                AppendLogUnsafe($"Added {kind} property \"{cleanName}\" at \"{fullCreatedPath}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, fullCreatedPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, string CreatedPath) AddImage(
+    public (string? Error, string Path) AddImage(
         string archiveId,
         string? parentPath,
         string imageName,
         byte[]? rawImgBytes = null,
-        string? jsonContent = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+        string? jsonContent = null) =>
+        WithSessionPath(archiveId, session => {
             string cleanName = imageName.Trim().Trim('/');
             if (string.IsNullOrEmpty(cleanName)) {
-                return (false, "Image name is required.", string.Empty);
+                return ("Image name is required.", string.Empty);
             }
             if (!cleanName.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
                 cleanName += ".img";
             }
 
-            string normParent = ArchiveSession.NormalizePath(parentPath ?? string.Empty);
-            (string? existingImg, _) = ArchiveSession.SplitImageAndSubPath(normParent);
-            if (existingImg is not null) {
-                int lastSlash = existingImg.LastIndexOf('/');
-                normParent = lastSlash >= 0 ? existingImg[..lastSlash] : string.Empty;
-            }
+            string fullImgPath = JoinPath(ContainingDirectory(parentPath), cleanName);
+            WzValue rootVal = rawImgBytes is { Length: > 0 } ? WzValue.Parse(rawImgBytes)
+                : !string.IsNullOrWhiteSpace(jsonContent) ? JsonWzCodec.Parse(jsonContent)
+                : new WzValue.Object();
 
-            string fullImgPath = string.IsNullOrEmpty(normParent) ? cleanName : $"{normParent}/{cleanName}";
+            session.AddOrReplaceVirtualImage(fullImgPath, rootVal);
+            AppendLogUnsafe($"Added image \"{fullImgPath}\" to \"{session.Name}\".", RepackerLogLevel.Success);
+            return Selected(null, fullImgPath);
+        });
 
-            try {
-                WzValue rootVal;
-                if (rawImgBytes is { Length: > 0 }) {
-                    rootVal = WzValue.Parse(rawImgBytes);
-                } else if (!string.IsNullOrWhiteSpace(jsonContent)) {
-                    rootVal = JsonWzCodec.Parse(jsonContent);
-                } else {
-                    rootVal = new WzValue.Object();
-                }
-
-                session.AddOrReplaceVirtualImage(fullImgPath, rootVal);
-                SelectedNodePath = fullImgPath;
-                AppendLogUnsafe($"Added image \"{fullImgPath}\" to \"{session.Name}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, fullImgPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, string CreatedPath) AddDirectory(
+    public (string? Error, string Path) AddDirectory(
         string archiveId,
         string? parentPath,
-        string dirName) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+        string dirName) =>
+        WithSessionPath(archiveId, session => {
             string cleanName = dirName.Trim().Trim('/');
             if (string.IsNullOrEmpty(cleanName)) {
-                return (false, "Directory name is required.", string.Empty);
+                return ("Directory name is required.", string.Empty);
             }
 
-            string normParent = ArchiveSession.NormalizePath(parentPath ?? string.Empty);
-            (string? existingImg, _) = ArchiveSession.SplitImageAndSubPath(normParent);
-            if (existingImg is not null) {
-                int lastSlash = existingImg.LastIndexOf('/');
-                normParent = lastSlash >= 0 ? existingImg[..lastSlash] : string.Empty;
-            }
+            string normParent = ContainingDirectory(parentPath);
+            session.AddVirtualDirectory(normParent, cleanName);
+            string createdPath = JoinPath(normParent, cleanName);
+            AppendLogUnsafe($"Created directory \"{createdPath}\" in \"{session.Name}\".", RepackerLogLevel.Success);
+            return Selected(null, createdPath);
+        });
 
-            try {
-                session.AddVirtualDirectory(normParent, cleanName);
-                string createdPath = string.IsNullOrEmpty(normParent) ? cleanName : $"{normParent}/{cleanName}";
-                SelectedNodePath = createdPath;
-                AppendLogUnsafe($"Created directory \"{createdPath}\" in \"{session.Name}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, createdPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, string NewPath) RenameNode(string archiveId, string path, string newName) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+    public (string? Error, string Path) RenameNode(string archiveId, string path, string newName) =>
+        WithSessionPath(archiveId, session => {
             string cleanNewName = newName.Trim().Trim('/');
             if (string.IsNullOrEmpty(cleanNewName)) {
-                return (false, "New name cannot be empty.", string.Empty);
+                return ("New name cannot be empty.", string.Empty);
             }
 
             string norm = ArchiveSession.NormalizePath(path);
@@ -1114,681 +887,430 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
                 session.Name = cleanNewName;
                 AppendLogUnsafe($"Renamed archive to \"{cleanNewName}\".", RepackerLogLevel.Info);
-                NotifyStateChanged();
-                return (true, null, string.Empty);
+                return (null, string.Empty);
             }
 
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
 
-            // Rename directory or .img file
+            // Rename a directory or an .img file
             if (imgPath is null || string.IsNullOrEmpty(subPath)) {
                 if (imgPath is not null && !cleanNewName.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
                     cleanNewName += ".img";
                 }
-                int lastSlash = norm.LastIndexOf('/');
-                string parentDir = lastSlash >= 0 ? norm[..lastSlash] : string.Empty;
-                string newFullPath = string.IsNullOrEmpty(parentDir) ? cleanNewName : $"{parentDir}/{cleanNewName}";
                 if (!session.RenameVirtualNode(norm, cleanNewName)) {
-                    return (false, $"Could not rename \"{norm}\" to \"{cleanNewName}\".", string.Empty);
+                    return ($"Could not rename \"{norm}\" to \"{cleanNewName}\".", string.Empty);
                 }
-                SelectedNodePath = newFullPath;
-                AppendLogUnsafe($"Renamed \"{norm}\" -> \"{newFullPath}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, newFullPath);
+                string renamedPath = JoinPath(ParentOf(norm), cleanNewName);
+                AppendLogUnsafe($"Renamed \"{norm}\" -> \"{renamedPath}\".", RepackerLogLevel.Success);
+                return Selected(null, renamedPath);
             }
 
-            // Rename property inside .img
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                int lastSlash = subPath.LastIndexOf('/');
-                string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-                string oldPropName = lastSlash >= 0 ? subPath[(lastSlash + 1)..] : subPath;
+            // Rename a property inside an .img
+            WzValue imgRoot = session.GetOrParseImage(imgPath);
+            string parentSubPath = ParentOf(subPath);
+            string oldPropName = LeafOf(subPath);
+            List<WzProperty>? kids = GetMutablePropertyList(string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath));
+            if (kids is null) {
+                return ("Parent node does not support named properties.", string.Empty);
+            }
+            if (kids.Any(p => p.Name == cleanNewName && p.Name != oldPropName)) {
+                return ($"A sibling property named \"{cleanNewName}\" already exists.", string.Empty);
+            }
+            int idx = kids.FindIndex(p => p.Name == oldPropName);
+            if (idx < 0) {
+                return ($"Property \"{oldPropName}\" not found.", string.Empty);
+            }
 
-                WzValue? parentVal = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
-                List<WzProperty>? kids = GetMutablePropertyList(parentVal);
-                if (kids is null) {
-                    return (false, "Parent node does not support named properties.", string.Empty);
-                }
-
-                if (kids.Any(p => p.Name == cleanNewName && p.Name != oldPropName)) {
-                    return (false, $"A sibling property named \"{cleanNewName}\" already exists.", string.Empty);
-                }
-
-                int idx = kids.FindIndex(p => p.Name == oldPropName);
-                if (idx < 0) {
-                    return (false, $"Property \"{oldPropName}\" not found.", string.Empty);
-                }
-
-                session.RecordUndoSnapshot(imgPath);
+            string newFullPath = $"{imgPath}/{JoinPath(parentSubPath, cleanNewName)}";
+            string? error = EditImage(session, imgPath, () => {
                 kids[idx] = kids[idx] with { Name = cleanNewName };
-                session.MarkImageModified(imgPath);
+                return null;
+            }, () => $"Renamed property \"{norm}\" -> \"{newFullPath}\".");
+            return Selected(error, newFullPath);
+        });
 
-                string newSubPath = string.IsNullOrEmpty(parentSubPath) ? cleanNewName : $"{parentSubPath}/{cleanNewName}";
-                string newFullPath = $"{imgPath}/{newSubPath}";
-                SelectedNodePath = newFullPath;
-                AppendLogUnsafe($"Renamed property \"{norm}\" -> \"{newFullPath}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, newFullPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, string ParentPath) DeleteNode(string archiveId, string path) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+    /// <summary>Marks a node deleted (it stays visible, shown as deleted, until saved). Returns the parent path.</summary>
+    public (string? Error, string Path) DeleteNode(string archiveId, string path) =>
+        WithSessionPath(archiveId, session => {
             string norm = ArchiveSession.NormalizePath(path);
             if (string.IsNullOrEmpty(norm)) {
-                return (false, "Use Close Archive to remove an entire archive.", string.Empty);
+                return ("Use Close Archive to remove an entire archive.", string.Empty);
             }
-
-            int lastSlash = norm.LastIndexOf('/');
-            string parentPath = lastSlash >= 0 ? norm[..lastSlash] : string.Empty;
+            string parentPath = ParentOf(norm);
 
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
             if (imgPath is null || string.IsNullOrEmpty(subPath)) {
                 VirtualFsNode? targetNode = session.ResolveVirtualNode(norm);
-                if (targetNode is null || targetNode.IsDeleted) {
-                    return (false, $"Could not delete node \"{norm}\".", string.Empty);
+                string cannotDelete = $"Could not delete node \"{norm}\".";
+                string? error = targetNode is null || targetNode.IsDeleted
+                    ? cannotDelete
+                    : ChangeNodeDeletion(session, norm, imgPath, delete: true, cannotDelete);
+                if (error is null) {
+                    SelectedNodePath = norm;
+                    AppendLogUnsafe($"Deleted \"{norm}\" from \"{session.Name}\".", RepackerLogLevel.Info);
                 }
-                if (imgPath is not null) {
-                    session.RecordUndoSnapshot(imgPath);
-                } else {
-                    session.RecordDirectoryUndoSnapshot(norm);
-                }
-                if (!session.RemoveVirtualNode(norm)) {
-                    return (false, $"Could not delete node \"{norm}\".", string.Empty);
-                }
-                SelectedNodePath = norm;
-                AppendLogUnsafe($"Deleted \"{norm}\" from \"{session.Name}\".", RepackerLogLevel.Info);
-                NotifyStateChanged();
-                return (true, null, parentPath);
+                return (error, parentPath);
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                int subSlash = subPath.LastIndexOf('/');
-                string parentSubPath = subSlash >= 0 ? subPath[..subSlash] : string.Empty;
-                string leafName = subSlash >= 0 ? subPath[(subSlash + 1)..] : subPath;
+            WzValue imgRoot = session.GetOrParseImage(imgPath);
+            string parentSubPath = ParentOf(subPath);
+            string leafName = LeafOf(subPath);
+            WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
+            string notFound = $"Property \"{subPath}\" not found.";
 
-                WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
-                if (parent is null) {
-                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
-                }
-
-                if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int cIdx) && cIdx >= 0 && cIdx < items.Count) {
-                    session.RecordUndoSnapshot(imgPath);
+            // Convex items are removed outright (they have no name to show as "deleted")
+            if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int cIdx) && cIdx >= 0 && cIdx < items.Count) {
+                string? convexError = EditImage(session, imgPath, () => {
                     items.RemoveAt(cIdx);
-                    session.MarkImageModified(imgPath);
-                    SelectedNodePath = parentPath;
-                    AppendLogUnsafe($"Deleted property \"{norm}\".", RepackerLogLevel.Info);
-                    NotifyStateChanged();
-                    return (true, null, parentPath);
-                }
+                    return null;
+                }, () => $"Deleted property \"{norm}\".", RepackerLogLevel.Info);
+                return Selected(convexError, parentPath);
+            }
 
-                List<WzProperty>? kids = GetMutablePropertyList(parent);
-                if (kids is null) {
-                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
-                }
+            List<WzProperty>? kids = GetMutablePropertyList(parent);
+            int propIdx = kids?.FindIndex(p => p.Name == leafName) ?? -1;
+            if (kids is null || propIdx < 0) {
+                return (notFound, string.Empty);
+            }
 
-                int propIdx = kids.FindIndex(p => p.Name == leafName);
-                if (propIdx < 0) {
-                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
-                }
-
-                WzValue deletedVal = CloneWzValue(kids[propIdx].Value);
-                session.RecordUndoSnapshot(imgPath);
+            WzValue deletedVal = CloneWzValue(kids[propIdx].Value);
+            string? deleteError = EditImage(session, imgPath, () => {
                 kids.RemoveAt(propIdx);
                 session.RecordDeletedProperty(imgPath, subPath, parentSubPath, leafName, propIdx, deletedVal);
-
-                session.MarkImageModified(imgPath);
+                return null;
+            }, () => $"Deleted property \"{norm}\".", RepackerLogLevel.Info);
+            if (deleteError is null) {
                 SelectedNodePath = norm;
-                AppendLogUnsafe($"Deleted property \"{norm}\".", RepackerLogLevel.Info);
-                NotifyStateChanged();
-                return (true, null, parentPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
             }
-        }
-    }
+            return (deleteError, parentPath);
+        });
 
-    public (bool Ok, string? Error, string RestoredPath) RestoreNode(string archiveId, string path) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
-            }
-
+    /// <summary>Restores a deleted node. Returns the restored node's path.</summary>
+    public (string? Error, string Path) RestoreNode(string archiveId, string path) =>
+        WithSessionPath(archiveId, session => {
             string norm = ArchiveSession.NormalizePath(path);
             if (string.IsNullOrEmpty(norm)) {
-                return (false, "Select a deleted node to restore.", string.Empty);
+                return ("Select a deleted node to restore.", string.Empty);
             }
 
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
             if (imgPath is null || string.IsNullOrEmpty(subPath)) {
-                if (!session.IsVirtualPathDeleted(norm)) {
-                    return (false, $"Node \"{norm}\" is not deleted or could not be restored.", string.Empty);
+                string notRestorable = $"Node \"{norm}\" is not deleted or could not be restored.";
+                string? error = session.IsVirtualPathDeleted(norm)
+                    ? ChangeNodeDeletion(session, norm, imgPath, delete: false, notRestorable)
+                    : notRestorable;
+                if (error is null) {
+                    AppendLogUnsafe($"Restored \"{norm}\" in \"{session.Name}\".", RepackerLogLevel.Success);
                 }
-                if (imgPath is not null) {
-                    session.RecordUndoSnapshot(imgPath);
-                } else {
-                    session.RecordDirectoryUndoSnapshot(norm);
-                }
-                if (!session.RestoreVirtualNode(norm)) {
-                    return (false, $"Node \"{norm}\" is not deleted or could not be restored.", string.Empty);
-                }
-                SelectedNodePath = norm;
-                AppendLogUnsafe($"Restored \"{norm}\" in \"{session.Name}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, norm);
+                return Selected(error, norm);
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                session.RecordUndoSnapshot(imgPath);
+            WzValue imgRoot = session.GetOrParseImage(imgPath);
+            string finalPath = norm;
+            string? restoreError = EditImage(session, imgPath, () => {
                 if (session.IsVirtualPathDeleted(imgPath)) {
                     session.RestoreVirtualNode(imgPath);
                 }
-
                 (bool restored, string? restoredSubPath) = session.RestoreDeletedProperty(imgPath, imgRoot, subPath);
                 if (!restored) {
-                    return (false, $"Property \"{subPath}\" is not deleted or could not be restored.", string.Empty);
+                    return $"Property \"{subPath}\" is not deleted or could not be restored.";
                 }
+                if (!string.IsNullOrEmpty(restoredSubPath)) {
+                    finalPath = $"{imgPath}/{restoredSubPath}";
+                }
+                return null;
+            }, () => $"Restored property \"{finalPath}\".");
+            return Selected(restoreError, finalPath);
+        });
 
-                session.MarkImageModified(imgPath);
-                string finalPath = string.IsNullOrEmpty(restoredSubPath) ? norm : $"{imgPath}/{restoredSubPath}";
-                SelectedNodePath = finalPath;
-                AppendLogUnsafe($"Restored property \"{finalPath}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, finalPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
+    /// <summary>Duplicates an .img (as <c>name_copy.img</c>) or a property (as <c>name_copy</c>). Returns the copy's path.</summary>
+    public (string? Error, string Path) DuplicateNode(string archiveId, string path) =>
+        WithSessionPath(archiveId, session => {
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, path, "Select an .img file or property to duplicate.", allowImageRoot: true);
+            if (error is not null) {
+                return (error, string.Empty);
             }
-        }
-    }
 
-    public (bool Ok, string? Error, string NewPath) DuplicateNode(string archiveId, string path) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty);
+            // Duplicate an entire .img file
+            if (target.IsImageRoot) {
+                string dirPart = ParentOf(target.ImagePath);
+                string stem = Path.GetFileNameWithoutExtension(target.ImagePath);
+                string candidatePath = JoinPath(dirPart, $"{stem}_copy.img");
+                for (int n = 2; session.ResolveVirtualNode(candidatePath) is not null; n++) {
+                    candidatePath = JoinPath(dirPart, $"{stem}_copy{n}.img");
+                }
+                session.AddOrReplaceVirtualImage(candidatePath, WzValue.Parse(target.ImageRoot.ToBytes()));
+                AppendLogUnsafe($"Duplicated image \"{target.ImagePath}\" -> \"{candidatePath}\".", RepackerLogLevel.Success);
+                return Selected(null, candidatePath);
+            }
+
+            // Duplicate a property inside the .img
+            string parentSubPath = ParentOf(target.SubPath);
+            string propName = LeafOf(target.SubPath);
+            List<WzProperty>? kids = GetMutablePropertyList(string.IsNullOrEmpty(parentSubPath) ? target.ImageRoot : ResolvePropertyNode(target.ImageRoot, parentSubPath));
+            if (kids is null) {
+                return ("Parent does not support named child properties.", string.Empty);
+            }
+
+            string copyName = $"{propName}_copy";
+            for (int n = 2; kids.Any(p => p.Name == copyName); n++) {
+                copyName = $"{propName}_copy{n}";
+            }
+            string newFullPath = $"{target.ImagePath}/{JoinPath(parentSubPath, copyName)}";
+            string? editError = EditImage(session, target.ImagePath, () => {
+                kids.Add(new WzProperty(copyName, CloneWzValue(target.Value)));
+                return null;
+            }, () => $"Duplicated property \"{target.ImagePath}/{target.SubPath}\" -> \"{newFullPath}\".");
+            return Selected(editError, newFullPath);
+        });
+
+    public (string? Error, ClipboardStateDto Clipboard) CopyNode(string archiveId, string path) =>
+        WithSession<(string? Error, ClipboardStateDto Clipboard)>(archiveId, e => (e, GetClipboardStateUnsafe()), session => {
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, path, "Select an .img file or property to copy.", allowImageRoot: true);
+            if (error is not null) {
+                return (error, GetClipboardStateUnsafe());
             }
 
             string norm = ArchiveSession.NormalizePath(path);
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
-            if (imgPath is null) {
-                return (false, "Select an .img file or property to duplicate.", string.Empty);
+            if (target.IsImageRoot) {
+                string imgLeaf = Path.GetFileName(target.ImagePath);
+                byte[] bytes = target.ImageRoot.ToBytes();
+                clipboard = new ClipboardEntry(session.ArchiveId, norm, imgLeaf, RepackerNodeKind.Image, RepackerPropertyKind.Object, bytes);
+                AppendLogUnsafe($"Copied image \"{imgLeaf}\" ({bytes.Length:N0} B) to clipboard.", RepackerLogLevel.Info);
+            } else {
+                string propLeaf = LeafOf(target.SubPath);
+                // Wrap the property in a 1-property Object so any WzValue type serializes cleanly
+                byte[] bytes = new WzValue.Object([new WzProperty(propLeaf, target.Value)]).ToBytes();
+                RepackerPropertyKind kind = DescribeWzValue(target.Value).Kind;
+                clipboard = new ClipboardEntry(session.ArchiveId, norm, propLeaf, RepackerNodeKind.Property, kind, bytes);
+                AppendLogUnsafe($"Copied property \"{propLeaf}\" ({kind}) to clipboard.", RepackerLogLevel.Info);
             }
+            return (null, GetClipboardStateUnsafe());
+        });
 
-            try {
-                // Duplicate an entire .img file
-                if (string.IsNullOrEmpty(subPath)) {
-                    WzValue origImg = session.GetOrParseImage(imgPath);
-                    WzValue clonedImg = WzValue.Parse(origImg.ToBytes());
-                    int slash = imgPath.LastIndexOf('/');
-                    string dirPart = slash >= 0 ? imgPath[..slash] : string.Empty;
-                    string stem = Path.GetFileNameWithoutExtension(imgPath);
-                    string candidateName = $"{stem}_copy.img";
-                    string candidatePath = string.IsNullOrEmpty(dirPart) ? candidateName : $"{dirPart}/{candidateName}";
-                    int n = 2;
-                    while (session.ResolveVirtualNode(candidatePath) is not null) {
-                        candidateName = $"{stem}_copy{n++}.img";
-                        candidatePath = string.IsNullOrEmpty(dirPart) ? candidateName : $"{dirPart}/{candidateName}";
-                    }
-                    session.AddOrReplaceVirtualImage(candidatePath, clonedImg);
-                    SelectedNodePath = candidatePath;
-                    AppendLogUnsafe($"Duplicated image \"{imgPath}\" -> \"{candidatePath}\".", RepackerLogLevel.Success);
-                    NotifyStateChanged();
-                    return (true, null, candidatePath);
-                }
-
-                // Duplicate a property inside .img
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue? target = ResolvePropertyNode(imgRoot, subPath);
-                if (target is null) {
-                    return (false, $"Property \"{subPath}\" not found.", string.Empty);
-                }
-
-                int lastSlash = subPath.LastIndexOf('/');
-                string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-                string propName = lastSlash >= 0 ? subPath[(lastSlash + 1)..] : subPath;
-
-                WzValue? parentVal = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
-                List<WzProperty>? kids = GetMutablePropertyList(parentVal);
-                if (kids is null) {
-                    return (false, "Parent does not support named child properties.", string.Empty);
-                }
-
-                string copyName = $"{propName}_copy";
-                int copySeq = 2;
-                while (kids.Any(p => p.Name == copyName)) {
-                    copyName = $"{propName}_copy{copySeq++}";
-                }
-
-                session.RecordUndoSnapshot(imgPath);
-                WzValue clonedVal = CloneWzValue(target);
-                kids.Add(new WzProperty(copyName, clonedVal));
-                session.MarkImageModified(imgPath);
-
-                string newSubPath = string.IsNullOrEmpty(parentSubPath) ? copyName : $"{parentSubPath}/{copyName}";
-                string newFullPath = $"{imgPath}/{newSubPath}";
-                SelectedNodePath = newFullPath;
-                AppendLogUnsafe($"Duplicated property \"{norm}\" -> \"{newFullPath}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, newFullPath);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, ClipboardStateDto Clipboard) CopyNode(string archiveId, string path) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", GetClipboardState());
-            }
-
-            string norm = ArchiveSession.NormalizePath(path);
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
-            if (imgPath is null) {
-                return (false, "Select an .img file or property to copy.", GetClipboardState());
-            }
-
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                if (string.IsNullOrEmpty(subPath)) {
-                    string imgLeaf = Path.GetFileName(imgPath);
-                    byte[] bytes = imgRoot.ToBytes();
-                    clipboard = new ClipboardEntry(
-                        session.ArchiveId,
-                        norm,
-                        imgLeaf,
-                        RepackerNodeKind.Image,
-                        RepackerPropertyKind.Object,
-                        bytes);
-                    AppendLogUnsafe($"Copied image \"{imgLeaf}\" ({bytes.Length:N0} B) to clipboard.", RepackerLogLevel.Info);
-                } else {
-                    WzValue? propVal = ResolvePropertyNode(imgRoot, subPath);
-                    if (propVal is null) {
-                        return (false, $"Property \"{subPath}\" not found.", GetClipboardState());
-                    }
-                    string propLeaf = subPath.Contains('/') ? subPath[(subPath.LastIndexOf('/') + 1)..] : subPath;
-                    // Wrap single property inside a 1-property Object so any WzValue type serializes cleanly
-                    var wrapper = new WzValue.Object([new WzProperty(propLeaf, propVal)]);
-                    byte[] bytes = wrapper.ToBytes();
-                    (RepackerPropertyKind pKind, _, _) = DescribeWzValue(propVal);
-                    clipboard = new ClipboardEntry(
-                        session.ArchiveId,
-                        norm,
-                        propLeaf,
-                        RepackerNodeKind.Property,
-                        pKind,
-                        bytes);
-                    AppendLogUnsafe($"Copied property \"{propLeaf}\" ({pKind}) to clipboard.", RepackerLogLevel.Info);
-                }
-
-                NotifyStateChanged();
-                return (true, null, GetClipboardState());
-            } catch (Exception ex) {
-                return (false, ex.Message, GetClipboardState());
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, string PastedPath) PasteNode(
+    public (string? Error, string Path) PasteNode(
         string targetArchiveId,
         string? targetPath,
-        string? overrideName = null) {
-        lock (syncLock) {
+        string? overrideName = null) =>
+        WithSessionPath(targetArchiveId, session => {
             if (clipboard is null) {
-                return (false, "Clipboard is empty.", string.Empty);
-            }
-
-            ArchiveSession? session = FindSessionUnsafe(targetArchiveId);
-            if (session is null) {
-                return (false, $"Archive \"{targetArchiveId}\" not found.", string.Empty);
+                return ("Clipboard is empty.", string.Empty);
             }
 
             string normTarget = ArchiveSession.NormalizePath(targetPath ?? string.Empty);
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(normTarget);
 
-            try {
-                // If clipboard holds an entire .img and target is archive root or directory
-                if (clipboard.NodeKind == RepackerNodeKind.Image && imgPath is null) {
-                    WzValue parsedImg = WzValue.Parse(clipboard.SerializedBytes);
-                    string targetImgName = !string.IsNullOrWhiteSpace(overrideName) ? overrideName.Trim() : clipboard.Name;
-                    if (!targetImgName.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
-                        targetImgName += ".img";
-                    }
-                    string destPath = string.IsNullOrEmpty(normTarget) ? targetImgName : $"{normTarget}/{targetImgName}";
-                    int seq = 2;
-                    string stem = Path.GetFileNameWithoutExtension(targetImgName);
-                    while (session.ResolveVirtualNode(destPath) is not null) {
-                        targetImgName = $"{stem}_{seq++}.img";
-                        destPath = string.IsNullOrEmpty(normTarget) ? targetImgName : $"{normTarget}/{targetImgName}";
-                    }
-                    session.AddOrReplaceVirtualImage(destPath, parsedImg);
-                    SelectedNodePath = destPath;
-                    AppendLogUnsafe($"Pasted image \"{destPath}\" into \"{session.Name}\".", RepackerLogLevel.Success);
-                    NotifyStateChanged();
-                    return (true, null, destPath);
+            // A whole .img pasted onto the archive root or a directory
+            if (clipboard.NodeKind == RepackerNodeKind.Image && imgPath is null) {
+                string targetImgName = !string.IsNullOrWhiteSpace(overrideName) ? overrideName.Trim() : clipboard.Name;
+                if (!targetImgName.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
+                    targetImgName += ".img";
                 }
-
-                if (imgPath is null) {
-                    return (false, "Select an .img file or property inside an .img file to paste a property.", string.Empty);
+                string stem = Path.GetFileNameWithoutExtension(targetImgName);
+                string destPath = JoinPath(normTarget, targetImgName);
+                for (int seq = 2; session.ResolveVirtualNode(destPath) is not null; seq++) {
+                    destPath = JoinPath(normTarget, $"{stem}_{seq}.img");
                 }
-
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue? destParent = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
-                string effectiveSubPath = subPath;
-                if (destParent is not null && destParent is not WzValue.Object and not WzValue.Canvas) {
-                    int lastSlash = subPath.LastIndexOf('/');
-                    effectiveSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-                    destParent = string.IsNullOrEmpty(effectiveSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, effectiveSubPath);
-                }
-
-                List<WzProperty>? kids = GetMutablePropertyList(destParent);
-                if (kids is null) {
-                    return (false, "Destination node cannot hold child properties.", string.Empty);
-                }
-
-                WzValue unpackedVal;
-                if (clipboard.NodeKind == RepackerNodeKind.Image) {
-                    unpackedVal = WzValue.Parse(clipboard.SerializedBytes);
-                } else {
-                    WzValue wrapper = WzValue.Parse(clipboard.SerializedBytes);
-                    unpackedVal = wrapper.Children is { Count: > 0 } ? wrapper.Children[0].Value : wrapper;
-                }
-
-                string baseName = !string.IsNullOrWhiteSpace(overrideName)
-                    ? overrideName.Trim()
-                    : Path.GetFileNameWithoutExtension(clipboard.Name);
-                string finalName = baseName;
-                int n = 2;
-                while (kids.Any(p => p.Name == finalName)) {
-                    finalName = $"{baseName}_{n++}";
-                }
-
-                session.RecordUndoSnapshot(imgPath);
-                kids.Add(new WzProperty(finalName, unpackedVal));
-                session.MarkImageModified(imgPath);
-
-                string pastedSub = string.IsNullOrEmpty(effectiveSubPath) ? finalName : $"{effectiveSubPath}/{finalName}";
-                string pastedFull = $"{imgPath}/{pastedSub}";
-                SelectedNodePath = pastedFull;
-                AppendLogUnsafe($"Pasted \"{pastedFull}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, pastedFull);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty);
+                session.AddOrReplaceVirtualImage(destPath, WzValue.Parse(clipboard.SerializedBytes));
+                AppendLogUnsafe($"Pasted image \"{destPath}\" into \"{session.Name}\".", RepackerLogLevel.Success);
+                return Selected(null, destPath);
             }
-        }
-    }
+
+            if (imgPath is null) {
+                return ("Select an .img file or property inside an .img file to paste a property.", string.Empty);
+            }
+
+            // Paste into the selected container, or next to the selected leaf property
+            WzValue imgRoot = session.GetOrParseImage(imgPath);
+            WzValue? destParent = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
+            string effectiveSubPath = subPath;
+            if (destParent is not null and not WzValue.Object and not WzValue.Canvas) {
+                effectiveSubPath = ParentOf(subPath);
+                destParent = string.IsNullOrEmpty(effectiveSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, effectiveSubPath);
+            }
+            List<WzProperty>? kids = GetMutablePropertyList(destParent);
+            if (kids is null) {
+                return ("Destination node cannot hold child properties.", string.Empty);
+            }
+
+            WzValue pasted = WzValue.Parse(clipboard.SerializedBytes);
+            WzValue unpackedVal = clipboard.NodeKind == RepackerNodeKind.Image || pasted.Children is not { Count: > 0 }
+                ? pasted
+                : pasted.Children[0].Value;
+
+            string baseName = !string.IsNullOrWhiteSpace(overrideName) ? overrideName.Trim() : Path.GetFileNameWithoutExtension(clipboard.Name);
+            string finalName = baseName;
+            for (int n = 2; kids.Any(p => p.Name == finalName); n++) {
+                finalName = $"{baseName}_{n}";
+            }
+
+            string pastedFull = $"{imgPath}/{JoinPath(effectiveSubPath, finalName)}";
+            string? error = EditImage(session, imgPath, () => {
+                kids.Add(new WzProperty(finalName, unpackedVal));
+                return null;
+            }, () => $"Pasted \"{pastedFull}\".");
+            return Selected(error, pastedFull);
+        });
 
     // -------------------------------------------------------------------------
     // Canvas, Sound, JSON & Outlink Operations
     // -------------------------------------------------------------------------
 
-    public (bool Ok, string? Error) ReplaceCanvasPng(
+    public string? ReplaceCanvasPng(
         string archiveId,
         string path,
         byte[] pngBytes,
         WzCanvasFormat? format = null,
         int? originX = null,
         int? originY = null,
-        int? delayMs = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null || string.IsNullOrEmpty(subPath)) {
-                return (false, "Select a Canvas property to replace its image.");
+        int? delayMs = null) =>
+        WithSession(archiveId, session => {
+            (string? error, NodeTarget<WzValue.Canvas> target) = ResolveNode<WzValue.Canvas>(
+                session, path, "Select a Canvas property to replace its image.");
+            if (error is not null) {
+                return error;
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                if (ResolvePropertyNode(imgRoot, subPath) is not WzValue.Canvas canvas) {
-                    return (false, $"Property \"{subPath}\" is not a Canvas.");
-                }
+            WzValue.Canvas canvas = target.Value;
+            WzCanvasFormat targetFormat = format ?? (WzCanvasFormat) canvas.Format;
+            if (!Enum.IsDefined(targetFormat)) {
+                targetFormat = WzCanvasFormat.Bgra8888;
+            }
+            (int width, int height, byte[] compressed) = WzCanvasCodec.EncodePngToCanvasPayload(pngBytes, targetFormat);
 
-                WzCanvasFormat targetFormat = format ?? (WzCanvasFormat) canvas.Format;
-                if (!Enum.IsDefined(targetFormat)) {
-                    targetFormat = WzCanvasFormat.Bgra8888;
-                }
-                (int width, int height, byte[] compressed) = WzCanvasCodec.EncodePngToCanvasPayload(pngBytes, targetFormat);
-
-                session.RecordUndoSnapshot(imgPath);
+            return EditImage(session, target.ImagePath, () => {
                 canvas.Width = width;
                 canvas.Height = height;
                 canvas.Format = (int) targetFormat;
                 canvas.Payload = compressed;
                 canvas.Properties.RemoveAll(static p => p.Name is "_outlink" or "_inlink");
-
                 if (originX.HasValue && originY.HasValue) {
                     canvas["origin"] = new WzValue.Vector(originX.Value, originY.Value);
                 }
                 if (delayMs.HasValue) {
                     canvas["delay"] = new WzValue.Int(delayMs.Value);
                 }
+                return null;
+            }, () => $"Replaced Canvas \"{path}\" with {width}x{height} PNG ({targetFormat.GetDisplayName()}, {compressed.Length:N0} B).");
+        });
 
-                session.MarkImageModified(imgPath);
-                AppendLogUnsafe($"Replaced Canvas \"{path}\" with {width}x{height} PNG ({targetFormat.GetDisplayName()}, {compressed.Length:N0} B).", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null);
-            } catch (Exception ex) {
-                return (false, ex.Message);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error) ChangeCanvasFormat(string archiveId, string path, WzCanvasFormat newFormat) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null || string.IsNullOrEmpty(subPath)) {
-                return (false, "Select a Canvas property to convert its pixel format.");
+    public string? ChangeCanvasFormat(string archiveId, string path, WzCanvasFormat newFormat) =>
+        WithSession(archiveId, session => {
+            (string? error, NodeTarget<WzValue.Canvas> target) = ResolveNode<WzValue.Canvas>(
+                session, path, "Select a Canvas property to convert its pixel format.");
+            if (error is not null) {
+                return error;
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                if (ResolvePropertyNode(imgRoot, subPath) is not WzValue.Canvas canvas) {
-                    return (false, $"Property \"{subPath}\" is not a Canvas.");
-                }
-
-                byte[] rgba = WzCanvasCodec.DecodeToRgba(canvas);
-                byte[] reencoded = WzCanvasCodec.EncodeFromRgba(canvas.Width, canvas.Height, newFormat, rgba);
-
-                session.RecordUndoSnapshot(imgPath);
+            WzValue.Canvas canvas = target.Value;
+            byte[] reencoded = WzCanvasCodec.EncodeFromRgba(canvas.Width, canvas.Height, newFormat, WzCanvasCodec.DecodeToRgba(canvas));
+            return EditImage(session, target.ImagePath, () => {
                 canvas.Format = (int) newFormat;
                 canvas.Payload = reencoded;
-                session.MarkImageModified(imgPath);
+                return null;
+            }, () => $"Converted Canvas \"{path}\" to {newFormat.GetDisplayName()} ({reencoded.Length:N0} B).");
+        });
 
-                AppendLogUnsafe($"Converted Canvas \"{path}\" to {newFormat.GetDisplayName()} ({reencoded.Length:N0} B).", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null);
-            } catch (Exception ex) {
-                return (false, ex.Message);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error) ReplaceSound(
+    public string? ReplaceSound(
         string archiveId,
         string path,
         byte[] audioBytes,
-        int? durationMs = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null || string.IsNullOrEmpty(subPath)) {
-                return (false, "Select a Sound property to replace its audio.");
+        int? durationMs = null) =>
+        WithSession(archiveId, session => {
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, path, "Select a Sound property to replace its audio.");
+            if (error is not null) {
+                return error;
             }
 
+            WzValue.Sound newSound = WzSoundCodec.CreateFromAudioBytes(audioBytes, durationMs);
+            return EditImage(
+                session,
+                target.ImagePath,
+                () => TryReplacePropertyNode(target.ImageRoot, target.SubPath, newSound) ? null : $"Failed to replace Sound at \"{target.SubPath}\".",
+                () => $"Replaced Sound_DX8 \"{path}\" ({audioBytes.Length:N0} B, {newSound.Duration} ms).");
+        });
+
+    public string? ApplyJsonSubtree(string archiveId, string path, string jsonText) =>
+        WithSession(archiveId, session => {
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, path, "Select an .img file or a property inside an .img file to apply JSON changes.", allowImageRoot: true);
+            if (error is not null) {
+                return error;
+            }
+
+            WzValue updated;
             try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                WzValue.Sound newSound = WzSoundCodec.CreateFromAudioBytes(audioBytes, durationMs);
-
-                session.RecordUndoSnapshot(imgPath);
-                if (!TryReplacePropertyNode(imgRoot, subPath, newSound)) {
-                    return (false, $"Failed to replace Sound at \"{subPath}\".");
-                }
-                session.MarkImageModified(imgPath);
-
-                AppendLogUnsafe($"Replaced Sound_DX8 \"{path}\" ({audioBytes.Length:N0} B, {newSound.Duration} ms).", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null);
+                updated = JsonWzCodec.Parse(jsonText, target.Value);
             } catch (Exception ex) {
-                return (false, ex.Message);
-            }
-        }
-    }
-
-    public (bool Ok, string? Error) ApplyJsonSubtree(string archiveId, string path, string jsonText) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
-            if (imgPath is null) {
-                return (false, "Select an .img file or a property inside an .img file to apply JSON changes.");
+                return $"Invalid JSON: {ex.Message}";
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                bool isImgRoot = string.IsNullOrEmpty(subPath);
-                WzValue? existing = isImgRoot ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
-                WzValue updated = JsonWzCodec.Parse(jsonText, existing);
-
-                session.RecordUndoSnapshot(imgPath);
-                if (isImgRoot) {
-                    session.MarkImageModified(imgPath, updated);
-                } else {
-                    if (!TryReplacePropertyNode(imgRoot, subPath, updated)) {
-                        return (false, $"Failed to apply JSON to \"{subPath}\".");
-                    }
-                    session.MarkImageModified(imgPath);
+            return EditImage(session, target.ImagePath, () => {
+                if (target.IsImageRoot) {
+                    session.MarkImageModified(target.ImagePath, updated);
+                    return null;
                 }
+                return TryReplacePropertyNode(target.ImageRoot, target.SubPath, updated) ? null : $"Failed to apply JSON to \"{target.SubPath}\".";
+            }, () => $"Applied JSON edits to \"{path}\".");
+        });
 
-                AppendLogUnsafe($"Applied JSON edits to \"{path}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null);
-            } catch (Exception ex) {
-                return (false, $"Invalid JSON: {ex.Message}");
-            }
-        }
-    }
-
-    public (bool Ok, string? Error, int InlinedCount) InlineOutlinks(string archiveId, string? path = null) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", 0);
-            }
-
+    /// <summary>Bakes linked (<c>_inlink</c>/<c>_outlink</c>) sprite pixels into the Canvas nodes under a node.</summary>
+    public (string? Error, int InlinedCount) InlineOutlinks(string archiveId, string? path = null) =>
+        WithSession<(string? Error, int InlinedCount)>(archiveId, static e => (e, 0), session => {
             string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
             (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
+            int totalInlined = 0;
 
-            try {
-                int totalInlined = 0;
-                if (imgPath is not null) {
-                    WzValue imgRoot = session.GetOrParseImage(imgPath);
-                    WzValue? target = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
-                    if (target is null) {
-                        return (false, $"Node \"{norm}\" not found.", 0);
-                    }
-                    session.RecordUndoSnapshot(imgPath);
-                    totalInlined = CanvasLinkResolver.InlineLinksRecursive(archives, session, imgRoot, target);
-                    if (totalInlined > 0) {
-                        session.MarkImageModified(imgPath);
-                    }
-                } else {
-                    // Inline across all images under directory / archive
-                    VirtualFsNode? dir = session.ResolveVirtualNode(norm);
-                    if (dir is null) {
-                        return (false, $"Directory \"{norm}\" not found.", 0);
-                    }
-
-                    void WalkDir(VirtualFsNode d, string prefix) {
-                        session.EnsureDirectoryLinked(d);
-                        foreach (VirtualFsNode c in d.Children) {
-                            if (c.IsDeleted) continue;
-                            string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
-                            if (c.IsDir) {
-                                WalkDir(c, full);
-                            } else if (c.IsImage) {
-                                WzValue root = session.GetOrParseImage(full);
-                                int count = CanvasLinkResolver.InlineLinksRecursive(archives, session, root, root);
-                                if (count > 0) {
-                                    session.MarkImageModified(full);
-                                    totalInlined += count;
-                                }
-                            }
-                        }
-                    }
-
-                    WalkDir(dir, norm);
+            if (imgPath is not null) {
+                WzValue imgRoot = session.GetOrParseImage(imgPath);
+                WzValue? target = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
+                if (target is null) {
+                    return ($"Node \"{norm}\" not found.", 0);
                 }
-
-                AppendLogUnsafe($"Inlined {totalInlined} linked Canvas sprite(s) in \"{session.Name}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, totalInlined);
-            } catch (Exception ex) {
-                return (false, ex.Message, 0);
+                // One undo step, committed only if something was actually inlined
+                ArchiveSession.UndoHistoryEntry undo = session.CaptureImageUndo(imgPath);
+                totalInlined = CanvasLinkResolver.InlineLinksRecursive(archives, session, imgRoot, target);
+                if (totalInlined > 0) {
+                    session.CommitUndo(undo);
+                    session.MarkImageModified(imgPath);
+                }
+            } else {
+                // Inline across all images under a directory / the archive root
+                VirtualFsNode? dir = session.ResolveVirtualNode(norm);
+                if (dir is null) {
+                    return ($"Directory \"{norm}\" not found.", 0);
+                }
+                foreach (string imagePath in EnumerateLiveImages(session, dir, norm)) {
+                    WzValue root = session.GetOrParseImage(imagePath);
+                    int count = CanvasLinkResolver.InlineLinksRecursive(archives, session, root, root);
+                    if (count > 0) {
+                        session.MarkImageModified(imagePath);
+                        totalInlined += count;
+                    }
+                }
             }
-        }
-    }
+            AppendLogUnsafe($"Inlined {totalInlined} linked Canvas sprite(s) in \"{session.Name}\".", RepackerLogLevel.Success);
+            return (null, totalInlined);
+        });
 
-    public (bool Ok, string? Error) Undo(string archiveId, string? path = null) =>
-        Undo(archiveId, path, out _);
+    /// <summary>Reverts the archive's most recent change. Returns the path of the node it affected.</summary>
+    public (string? Error, string AffectedPath) Undo(string archiveId) =>
+        WithSessionPath(archiveId, session => session.Undo(out string affected)
+            ? LoggedHistoryStep($"Undid last change in \"{affected}\".", affected)
+            : ("Nothing to undo.", string.Empty));
 
-    public (bool Ok, string? Error) Undo(string archiveId, string? path, out string affectedPath) {
-        lock (syncLock) {
-            affectedPath = string.Empty;
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            if (!session.Undo(out affectedPath)) {
-                return (false, "Nothing to undo.");
-            }
-            AppendLogUnsafe($"Undid last change in \"{affectedPath}\".", RepackerLogLevel.Info);
-            NotifyStateChanged();
-            return (true, null);
-        }
-    }
+    /// <summary>Re-applies the archive's most recently undone change. Returns the path of the node it affected.</summary>
+    public (string? Error, string AffectedPath) Redo(string archiveId) =>
+        WithSessionPath(archiveId, session => session.Redo(out string affected)
+            ? LoggedHistoryStep($"Redid change in \"{affected}\".", affected)
+            : ("Nothing to redo.", string.Empty));
 
-    public (bool Ok, string? Error) Redo(string archiveId, string? path = null) =>
-        Redo(archiveId, path, out _);
-
-    public (bool Ok, string? Error) Redo(string archiveId, string? path, out string affectedPath) {
-        lock (syncLock) {
-            affectedPath = string.Empty;
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.");
-            }
-            if (!session.Redo(out affectedPath)) {
-                return (false, "Nothing to redo.");
-            }
-            AppendLogUnsafe($"Redid change in \"{affectedPath}\".", RepackerLogLevel.Info);
-            NotifyStateChanged();
-            return (true, null);
-        }
+    private (string? Error, string Path) LoggedHistoryStep(string message, string affectedPath) {
+        AppendLogUnsafe(message, RepackerLogLevel.Info);
+        return (null, affectedPath);
     }
 
     // -------------------------------------------------------------------------
@@ -1818,93 +1340,64 @@ public sealed class RepackerWorkspace : IDisposable {
         return [.. results];
     }
 
-    public (bool Ok, string? Error, string FileName, string MimeType, byte[] Data) ExportNode(
+    /// <summary>
+    /// Exports a node as a downloadable file: the whole archive (.wz), an .img, JSON, a Canvas as PNG or a Sound as audio.
+    /// <see cref="RepackerExportFormat.Auto"/> picks the most natural format for the node.
+    /// </summary>
+    public (string? Error, string FileName, string MimeType, byte[] Data) ExportNode(
         string archiveId,
         string? path,
-        RepackerExportFormat format = RepackerExportFormat.Auto) {
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", string.Empty, string.Empty, []);
-            }
-
+        RepackerExportFormat format = RepackerExportFormat.Auto) =>
+        WithSession<(string? Error, string FileName, string MimeType, byte[] Data)>(archiveId, static e => (e, string.Empty, string.Empty, []), session => {
+            const string binaryMime = "application/octet-stream";
             string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
-
             if (string.IsNullOrEmpty(norm) || format == RepackerExportFormat.Wz) {
-                byte[] wzBytes = session.BuildArchiveBytes();
-                return (true, null, session.Name, "application/octet-stream", wzBytes);
+                return (null, session.Name, binaryMime, session.BuildArchiveBytes());
             }
 
-            (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(norm);
-            if (imgPath is null) {
-                return (false, "Select an .img file or property to export.", string.Empty, string.Empty, []);
+            (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
+                session, norm, "Select an .img file or property to export.", allowImageRoot: true);
+            if (error is not null) {
+                return (error, string.Empty, string.Empty, []);
             }
 
-            try {
-                WzValue imgRoot = session.GetOrParseImage(imgPath);
-                bool isImgRoot = string.IsNullOrEmpty(subPath);
-                WzValue? target = isImgRoot ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
-                if (target is null) {
-                    return (false, $"Property \"{subPath}\" not found.", string.Empty, string.Empty, []);
-                }
-
-                string baseName = isImgRoot
-                    ? Path.GetFileNameWithoutExtension(imgPath)
-                    : subPath.Replace('/', '_');
-
-                if (format == RepackerExportFormat.Img || (format == RepackerExportFormat.Auto && isImgRoot)) {
-                    byte[] imgBytes = target.ToBytes();
-                    string imgFileName = baseName.EndsWith(".img", StringComparison.OrdinalIgnoreCase) ? baseName : $"{baseName}.img";
-                    return (true, null, imgFileName, "application/octet-stream", imgBytes);
-                }
-
-                if (format == RepackerExportFormat.Json) {
-                    byte[] jsonBytes = Encoding.UTF8.GetBytes(target.ToJson());
-                    return (true, null, $"{baseName}.json", "application/json", jsonBytes);
-                }
-
-                // Resolve UOL if needed
-                if (target is WzValue.Uol(var uolStr)) {
-                    (WzValue? uolResolved, _) = ResolveUolTarget(imgRoot, subPath, uolStr);
-                    if (uolResolved is not null) {
-                        target = uolResolved;
-                    }
-                }
-
-                if (target is WzValue.Canvas canvas && format is RepackerExportFormat.Png or RepackerExportFormat.Auto) {
-                    CanvasPreviewDto preview = CanvasLinkResolver.BuildCanvasPreview(archives, session, imgPath, imgRoot, canvas);
-                    return (true, null, $"{baseName}.png", "image/png", preview.PngBytes);
-                }
-
-                if (target is WzValue.Sound sound && format is RepackerExportFormat.Audio or RepackerExportFormat.Auto) {
-                    ExtractedSoundData audio = WzSoundCodec.ExtractAudioStream(sound);
-                    return (true, null, $"{baseName}.{audio.Extension}", audio.MimeType, audio.AudioBytes);
-                }
-
-                // Default to JSON export for any other property
-                byte[] fallbackJson = Encoding.UTF8.GetBytes(target.ToJson());
-                return (true, null, $"{baseName}.json", "application/json", fallbackJson);
-            } catch (Exception ex) {
-                return (false, ex.Message, string.Empty, string.Empty, []);
+            string baseName = target.IsImageRoot ? Path.GetFileNameWithoutExtension(target.ImagePath) : target.SubPath.Replace('/', '_');
+            if (format == RepackerExportFormat.Img || (format == RepackerExportFormat.Auto && target.IsImageRoot)) {
+                string imgFileName = baseName.EndsWith(".img", StringComparison.OrdinalIgnoreCase) ? baseName : $"{baseName}.img";
+                return (null, imgFileName, binaryMime, target.Value.ToBytes());
             }
-        }
-    }
+            if (format == RepackerExportFormat.Json) {
+                return (null, $"{baseName}.json", "application/json", Encoding.UTF8.GetBytes(target.Value.ToJson()));
+            }
 
-    public (bool Ok, string? Error, int ExportedCount) BatchExportToDirectory(
+            WzValue value = target.Value;
+            if (value is WzValue.Uol(var uolStr) && ResolveUolTarget(target.ImageRoot, target.SubPath, uolStr).Target is { } uolResolved) {
+                value = uolResolved;
+            }
+            if (value is WzValue.Canvas canvas && format is RepackerExportFormat.Png or RepackerExportFormat.Auto) {
+                CanvasPreviewDto preview = CanvasLinkResolver.BuildCanvasPreview(archives, session, target.ImagePath, target.ImageRoot, canvas);
+                return (null, $"{baseName}.png", "image/png", preview.PngBytes);
+            }
+            if (value is WzValue.Sound sound && format is RepackerExportFormat.Audio or RepackerExportFormat.Auto) {
+                ExtractedSoundData audio = WzSoundCodec.ExtractAudioStream(sound);
+                return (null, $"{baseName}.{audio.Extension}", audio.MimeType, audio.AudioBytes);
+            }
+
+            // Anything else exports as JSON
+            return (null, $"{baseName}.json", "application/json", Encoding.UTF8.GetBytes(value.ToJson()));
+        }, mutates: false);
+
+    /// <summary>Writes every matching asset under a node to <paramref name="outputDirectory"/>, mirroring the WZ paths.</summary>
+    public (string? Error, int ExportedCount) BatchExportToDirectory(
         string archiveId,
         string? path,
         string outputDirectory,
         RepackerBatchExportMode mode = RepackerBatchExportMode.Png) {
         if (string.IsNullOrWhiteSpace(outputDirectory)) {
-            return (false, "Output directory is required.", 0);
+            return ("Output directory is required.", 0);
         }
 
-        lock (syncLock) {
-            ArchiveSession? session = FindSessionUnsafe(archiveId);
-            if (session is null) {
-                return (false, $"Archive \"{archiveId}\" not found.", 0);
-            }
-
+        return WithSession<(string? Error, int ExportedCount)>(archiveId, static e => (e, 0), session => {
             try {
                 string fullOutDir = Path.GetFullPath(outputDirectory.Trim());
                 Directory.CreateDirectory(fullOutDir);
@@ -1913,63 +1406,47 @@ public sealed class RepackerWorkspace : IDisposable {
 
                 int exported = 0;
 
+                void WriteFile(string destFile, byte[] bytes) {
+                    Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? fullOutDir);
+                    System.IO.File.WriteAllBytes(destFile, bytes);
+                    exported++;
+                }
+
                 void ExportFromImage(string currentImgPath, string startSubPath) {
                     WzValue imgRoot = session.GetOrParseImage(currentImgPath);
-                    string imgRelDir = Path.Combine(
-                        fullOutDir,
-                        currentImgPath.Replace('/', Path.DirectorySeparatorChar));
+                    string imgRelDir = Path.Combine(fullOutDir, currentImgPath.Replace('/', Path.DirectorySeparatorChar));
+                    WzValue startNode = string.IsNullOrEmpty(startSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, startSubPath) ?? imgRoot;
 
                     if (mode == RepackerBatchExportMode.Img) {
-                        string destFile = imgRelDir;
-                        Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? fullOutDir);
-                        System.IO.File.WriteAllBytes(destFile, imgRoot.ToBytes());
-                        exported++;
+                        WriteFile(imgRelDir, imgRoot.ToBytes());
                         return;
                     }
-
                     if (mode == RepackerBatchExportMode.Json) {
-                        WzValue targetNode = string.IsNullOrEmpty(startSubPath)
-                            ? imgRoot
-                            : ResolvePropertyNode(imgRoot, startSubPath) ?? imgRoot;
-                        string destFile = string.IsNullOrEmpty(startSubPath)
+                        string jsonFile = string.IsNullOrEmpty(startSubPath)
                             ? $"{imgRelDir}.json"
                             : Path.Combine(imgRelDir, $"{startSubPath.Replace('/', '_')}.json");
-                        Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? fullOutDir);
-                        System.IO.File.WriteAllText(destFile, targetNode.ToJson());
-                        exported++;
+                        WriteFile(jsonFile, Encoding.UTF8.GetBytes(startNode.ToJson()));
                         return;
                     }
 
-                    WzValue walkRoot = string.IsNullOrEmpty(startSubPath)
-                        ? imgRoot
-                        : ResolvePropertyNode(imgRoot, startSubPath) ?? imgRoot;
-
                     void WalkProperties(WzValue node, string propPrefix) {
+                        string safeRel = propPrefix.Replace('/', Path.DirectorySeparatorChar);
                         if (node is WzValue.Canvas canvas && mode is RepackerBatchExportMode.Png or RepackerBatchExportMode.All) {
                             CanvasPreviewDto preview = CanvasLinkResolver.BuildCanvasPreview(archives, session, currentImgPath, imgRoot, canvas);
-                            string safeRel = string.IsNullOrEmpty(propPrefix) ? "canvas" : propPrefix.Replace('/', Path.DirectorySeparatorChar);
-                            string destFile = Path.Combine(imgRelDir, $"{safeRel}.png");
-                            Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? imgRelDir);
-                            System.IO.File.WriteAllBytes(destFile, preview.PngBytes);
-                            exported++;
+                            WriteFile(Path.Combine(imgRelDir, $"{(safeRel.Length > 0 ? safeRel : "canvas")}.png"), preview.PngBytes);
                         } else if (node is WzValue.Sound sound && mode is RepackerBatchExportMode.Sound or RepackerBatchExportMode.All) {
                             ExtractedSoundData audio = WzSoundCodec.ExtractAudioStream(sound);
-                            string safeRel = string.IsNullOrEmpty(propPrefix) ? "sound" : propPrefix.Replace('/', Path.DirectorySeparatorChar);
-                            string destFile = Path.Combine(imgRelDir, $"{safeRel}.{audio.Extension}");
-                            Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? imgRelDir);
-                            System.IO.File.WriteAllBytes(destFile, audio.AudioBytes);
-                            exported++;
+                            WriteFile(Path.Combine(imgRelDir, $"{(safeRel.Length > 0 ? safeRel : "sound")}.{audio.Extension}"), audio.AudioBytes);
                         }
 
                         if (node.Children is { Count: > 0 } children) {
                             foreach (WzProperty child in children) {
-                                string nextPrefix = string.IsNullOrEmpty(propPrefix) ? child.Name : $"{propPrefix}/{child.Name}";
-                                WalkProperties(child.Value, nextPrefix);
+                                WalkProperties(child.Value, JoinPath(propPrefix, child.Name));
                             }
                         }
                     }
 
-                    WalkProperties(walkRoot, startSubPath);
+                    WalkProperties(startNode, startSubPath);
                 }
 
                 if (imgPath is not null) {
@@ -1977,38 +1454,207 @@ public sealed class RepackerWorkspace : IDisposable {
                 } else {
                     VirtualFsNode? dir = session.ResolveVirtualNode(norm);
                     if (dir is null) {
-                        return (false, $"Node \"{norm}\" not found.", 0);
+                        return ($"Node \"{norm}\" not found.", 0);
                     }
-
-                    void WalkDirs(VirtualFsNode d, string prefix) {
-                        session.EnsureDirectoryLinked(d);
-                        foreach (VirtualFsNode c in d.Children) {
-                            if (c.IsDeleted) continue;
-                            string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
-                            if (c.IsDir) {
-                                WalkDirs(c, full);
-                            } else if (c.IsImage) {
-                                ExportFromImage(full, string.Empty);
-                            }
-                        }
+                    foreach (string imagePath in EnumerateLiveImages(session, dir, norm)) {
+                        ExportFromImage(imagePath, string.Empty);
                     }
-
-                    WalkDirs(dir, norm);
                 }
 
                 AppendLogUnsafe($"Batch-exported {exported} file(s) ({mode}) to \"{fullOutDir}\".", RepackerLogLevel.Success);
-                NotifyStateChanged();
-                return (true, null, exported);
+                return (null, exported);
             } catch (Exception ex) {
                 AppendLogUnsafe($"Batch export failed: {ex.Message}", RepackerLogLevel.Error);
-                return (false, ex.Message, 0);
+                return (ex.Message, 0);
+            }
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Operation helpers
+    //
+    // Convention: operations return their error message first (null = success), optionally followed by values,
+    // e.g. (string? Error, string Path). WithSession relies on this to tell success from failure.
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Runs <paramref name="action"/> under the workspace lock with the archive's session. Returns
+    /// <paramref name="fail"/>(message) when the archive is missing or the action throws, and bumps
+    /// <see cref="StateVersion"/> when a <paramref name="mutates"/> action succeeds.
+    /// </summary>
+    private TResult WithSession<TResult>(string archiveId, Func<string, TResult> fail, Func<ArchiveSession, TResult> action, bool mutates = true) {
+        lock (syncLock) {
+            ArchiveSession? session = FindSessionUnsafe(archiveId);
+            if (session is null) {
+                return fail($"Archive \"{archiveId}\" not found.");
+            }
+
+            TResult result;
+            try {
+                result = action(session);
+            } catch (Exception ex) {
+                return fail(ex.Message);
+            }
+
+            if (mutates && Succeeded(result)) {
+                NotifyStateChanged();
+            }
+            return result;
+        }
+    }
+
+    /// <summary><see cref="WithSession{TResult}"/> for operations that only return an error (null = success).</summary>
+    private string? WithSession(string archiveId, Func<ArchiveSession, string?> action) =>
+        WithSession(archiveId, static error => error, action);
+
+    /// <summary><see cref="WithSession{TResult}"/> for operations that return the path to select next.</summary>
+    private (string? Error, string Path) WithSessionPath(string archiveId, Func<ArchiveSession, (string? Error, string Path)> action) =>
+        WithSession(archiveId, static error => (error, string.Empty), action);
+
+    private static bool Succeeded<TResult>(TResult result) => result switch {
+        null => true,
+        string => false,
+        ITuple tuple => tuple.Length == 0 || tuple[0] is null,
+        _ => true,
+    };
+
+    /// <summary>Selects <paramref name="path"/> if the operation succeeded, and returns the operation result.</summary>
+    private (string? Error, string Path) Selected(string? error, string path) {
+        if (error is null) {
+            SelectedNodePath = path;
+        }
+        return (error, path);
+    }
+
+    /// <summary>A path resolved to its .img, the property path inside it, the parsed image, and the node itself.</summary>
+    private readonly record struct NodeTarget<T>(string ImagePath, string SubPath, WzValue ImageRoot, T Value) where T : WzValue {
+        public bool IsImageRoot => SubPath.Length == 0;
+    }
+
+    /// <summary>
+    /// Resolves <paramref name="path"/> to a node of type <typeparamref name="T"/> inside an .img. Fails with
+    /// <paramref name="selectHint"/> when the path is not inside an .img (or is the .img itself, unless
+    /// <paramref name="allowImageRoot"/>), when the property does not exist, or when it is not a <typeparamref name="T"/>.
+    /// </summary>
+    private static (string? Error, NodeTarget<T> Target) ResolveNode<T>(
+        ArchiveSession session,
+        string path,
+        string selectHint,
+        bool allowImageRoot = false) where T : WzValue {
+        (string? imgPath, string subPath) = ArchiveSession.SplitImageAndSubPath(path);
+        if (imgPath is null || (!allowImageRoot && string.IsNullOrEmpty(subPath))) {
+            return (selectHint, default);
+        }
+
+        WzValue imgRoot = session.GetOrParseImage(imgPath);
+        WzValue? node = string.IsNullOrEmpty(subPath) ? imgRoot : ResolvePropertyNode(imgRoot, subPath);
+        return node switch {
+            null => ($"Property \"{subPath}\" not found.", default),
+            T typed => (null, new NodeTarget<T>(imgPath, subPath, imgRoot, typed)),
+            _ => ($"Property \"{subPath}\" is not a {typeof(T).Name}.", default),
+        };
+    }
+
+    /// <summary>
+    /// Applies an edit to one .img as a single undo step. The image state is captured first; only if
+    /// <paramref name="edit"/> succeeds (returns null) is the undo step committed, the image marked modified, and
+    /// <paramref name="successLog"/> logged. A failed edit leaves no undo entry behind.
+    /// </summary>
+    private string? EditImage(
+        ArchiveSession session,
+        string imagePath,
+        Func<string?> edit,
+        Func<string> successLog,
+        RepackerLogLevel level = RepackerLogLevel.Success) {
+        ArchiveSession.UndoHistoryEntry undo = session.CaptureImageUndo(imagePath);
+        string? error = edit();
+        if (error is not null) {
+            return error;
+        }
+        session.CommitUndo(undo);
+        session.MarkImageModified(imagePath);
+        AppendLogUnsafe(successLog(), level);
+        return null;
+    }
+
+    /// <summary>
+    /// Deletes or restores a directory or .img node as a single undo step. Returns <paramref name="failMessage"/> (and
+    /// records nothing) if the node did not change.
+    /// </summary>
+    private static string? ChangeNodeDeletion(ArchiveSession session, string nodePath, string? imagePath, bool delete, string failMessage) {
+        ArchiveSession.UndoHistoryEntry undo = imagePath is not null
+            ? session.CaptureImageUndo(imagePath)
+            : session.CaptureDirectoryUndo(nodePath);
+        bool changed = delete ? session.RemoveVirtualNode(nodePath) : session.RestoreVirtualNode(nodePath);
+        if (!changed) {
+            return failMessage;
+        }
+        session.CommitUndo(undo);
+        return null;
+    }
+
+    /// <summary>Paths of every non-deleted .img under <paramref name="dir"/>, linking split/subdirectory archives as needed.</summary>
+    private static IEnumerable<string> EnumerateLiveImages(ArchiveSession session, VirtualFsNode dir, string dirPath) {
+        session.EnsureDirectoryLinked(dir);
+        foreach (VirtualFsNode child in dir.Children.ToArray()) {
+            if (child.IsDeleted) {
+                continue;
+            }
+            string childPath = JoinPath(dirPath, child.Name);
+            if (child.IsDir) {
+                foreach (string nested in EnumerateLiveImages(session, child, childPath)) {
+                    yield return nested;
+                }
+            } else if (child.IsImage) {
+                yield return childPath;
             }
         }
     }
 
-    // -------------------------------------------------------------------------
-    // Internal Helpers
-    // -------------------------------------------------------------------------
+    /// <summary>Builds the value for a newly added property, including blank/PNG-backed Canvases and Sounds.</summary>
+    private static WzValue CreateNewPropertyValue(
+        RepackerPropertyKind kind,
+        string? rawValue,
+        int? vecX,
+        int? vecY,
+        byte[]? binaryPayload,
+        WzCanvasFormat? canvasFormat) {
+        if (kind == RepackerPropertyKind.Sound) {
+            return WzSoundCodec.CreateFromAudioBytes(binaryPayload is { Length: > 0 } ? binaryPayload : []);
+        }
+        if (kind != RepackerPropertyKind.Canvas) {
+            return CreatePrimitiveOrStructuredValue(kind, rawValue, vecX, vecY, null);
+        }
+
+        WzCanvasFormat fmt = canvasFormat ?? WzCanvasFormat.Bgra8888;
+        if (binaryPayload is { Length: > 0 }) {
+            (int w, int h, byte[] comp) = WzCanvasCodec.EncodePngToCanvasPayload(binaryPayload, fmt);
+            return new WzValue.Canvas(w, h, (int) fmt, comp, [new WzProperty("origin", (vecX ?? w / 2, vecY ?? h))]);
+        }
+        const int blankSize = 32;
+        byte[] blank = WzCanvasCodec.EncodeFromRgba(blankSize, blankSize, fmt, new byte[blankSize * blankSize * 4]);
+        return new WzValue.Canvas(blankSize, blankSize, (int) fmt, blank, [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
+    }
+
+    private static string JoinPath(string parent, string child) =>
+        string.IsNullOrEmpty(parent) ? child : $"{parent}/{child}";
+
+    private static string ParentOf(string path) {
+        int slash = path.LastIndexOf('/');
+        return slash >= 0 ? path[..slash] : string.Empty;
+    }
+
+    private static string LeafOf(string path) {
+        int slash = path.LastIndexOf('/');
+        return slash >= 0 ? path[(slash + 1)..] : path;
+    }
+
+    /// <summary>The directory a new .img or directory goes into: the path itself, or the directory of the .img it is inside.</summary>
+    private static string ContainingDirectory(string? path) {
+        string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
+        (string? imgPath, _) = ArchiveSession.SplitImageAndSubPath(norm);
+        return imgPath is null ? norm : ParentOf(imgPath);
+    }
 
     /// <summary>
     /// Looks up an open session by id (or the first session when <paramref name="archiveId"/> is empty).

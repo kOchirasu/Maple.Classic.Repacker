@@ -412,6 +412,7 @@ namespace MapleRepacker {
         defaultWzVersion?: number | null;
     }
 
+    /** Full workspace status, as seen by the app (deltas from the server are merged into this). */
     export interface WorkspaceStatusPayloadDto {
         type: string;
         stateVersion: number;
@@ -425,6 +426,24 @@ namespace MapleRepacker {
         supportsNativeDialogs?: boolean;
     }
 
+    /**
+     * Status message on the wire: null/missing sections are unchanged, `logs` holds only new entries, and `logsReset`
+     * means existing entries should be dropped first. The first status after connecting is a full snapshot.
+     */
+    interface WorkspaceStatusDelta {
+        type: string;
+        stateVersion: number;
+        selectedArchiveId?: string | null;
+        selectedNodePath: string;
+        archives?: ArchiveSummaryDto[] | null;
+        clipboard?: ClipboardStateDto | null;
+        logs?: RepackerLogEntry[] | null;
+        logsReset?: boolean;
+        uiState?: SavedRepackerUiStateDto | null;
+        recentPaths?: string[] | null;
+        supportsNativeDialogs?: boolean;
+    }
+
     export interface RpcOperationResponse {
         ok: boolean;
         error?: string | null;
@@ -434,7 +453,6 @@ namespace MapleRepacker {
         archive?: ArchiveSummaryDto | null;
         archives?: ArchiveSummaryDto[] | null;
         clipboard?: ClipboardStateDto | null;
-        status?: WorkspaceStatusPayloadDto | null;
         cancelled?: boolean;
         filePaths?: string[] | null;
     }
@@ -513,6 +531,31 @@ namespace MapleRepacker {
     const rpcPending = new Map<number, PendingRpcRequest>();
     let rpcOpenWaiters: Array<(ws: WebSocket | null) => void> = [];
     const rpcStatusListeners: Array<(status: WorkspaceStatusPayloadDto) => void> = [];
+    const MAX_LOG_ENTRIES = 1000;
+    let latestStatus: WorkspaceStatusPayloadDto | null = null;
+
+    /** The most recent full workspace status (all deltas received so far merged together). */
+    export function getLatestStatus(): WorkspaceStatusPayloadDto | null {
+        return latestStatus;
+    }
+
+    function mergeStatusDelta(delta: WorkspaceStatusDelta): WorkspaceStatusPayloadDto {
+        const prev = latestStatus;
+        const keptLogs = delta.logsReset || !prev ? [] : prev.logs;
+        const logs = keptLogs.concat(delta.logs ?? []);
+        return {
+            type: delta.type,
+            stateVersion: delta.stateVersion,
+            selectedArchiveId: delta.selectedArchiveId,
+            selectedNodePath: delta.selectedNodePath,
+            archives: delta.archives ?? prev?.archives ?? [],
+            clipboard: delta.clipboard ?? prev?.clipboard ?? ({ hasData: false } as ClipboardStateDto),
+            logs: logs.length > MAX_LOG_ENTRIES ? logs.slice(logs.length - MAX_LOG_ENTRIES) : logs,
+            uiState: delta.uiState ?? prev?.uiState ?? null,
+            recentPaths: delta.recentPaths ?? prev?.recentPaths ?? [],
+            supportsNativeDialogs: delta.supportsNativeDialogs,
+        };
+    }
     const rpcConnectionListeners: Array<(connected: boolean) => void> = [];
 
     export function onRpcStatus(listener: (status: WorkspaceStatusPayloadDto) => void): void {
@@ -568,9 +611,9 @@ namespace MapleRepacker {
                     return;
                 }
                 if (msg.type === 'status') {
-                    const statusPayload = msg as unknown as WorkspaceStatusPayloadDto;
+                    latestStatus = mergeStatusDelta(msg as unknown as WorkspaceStatusDelta);
                     for (const listener of rpcStatusListeners) {
-                        listener(statusPayload);
+                        listener(latestStatus);
                     }
                 }
             } catch (err) {

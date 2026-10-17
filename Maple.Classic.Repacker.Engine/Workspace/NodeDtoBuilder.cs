@@ -7,9 +7,165 @@ using static Maple.Classic.Repacker.Engine.Workspace.WzValueFormatter;
 namespace Maple.Classic.Repacker.Engine.Workspace;
 
 /// <summary>
-/// Builds tree, child-row and inspection DTOs for properties inside <c>.img</c> nodes, including change-state evaluation against the baseline image.
+/// One child shown under a node (a directory, an <c>.img</c>, or a property inside an <c>.img</c>). Built once and
+/// then mapped to either a tree node (<see cref="NodeDtoBuilder.ToTreeNode"/>) or a child-table row
+/// (<see cref="NodeDtoBuilder.ToChildRow"/>), so both views always agree.
+/// </summary>
+internal readonly record struct NodeChild(
+    string Path,
+    string Name,
+    RepackerNodeKind NodeKind,
+    RepackerPropertyKind PropertyKind,
+    string TypeBadge,
+    string DisplayValue,
+    int ChildCount,
+    int SizeBytes,
+    RepackerChangeState ChangeState,
+    int DirectoryCount = 0,
+    int ImageCount = 0);
+
+/// <summary>
+/// Builds tree, child-row and inspection DTOs for workspace nodes, including change-state evaluation against the
+/// baseline image.
 /// </summary>
 internal static class NodeDtoBuilder {
+    // -------------------------------------------------------------------------
+    // Children of a directory / archive root
+    // -------------------------------------------------------------------------
+
+    internal static IEnumerable<NodeChild> DescribeDirectoryChildren(ArchiveSession session, string dirPath, VirtualFsNode dirNode) {
+        bool parentDeleted = session.IsVirtualPathDeleted(dirPath);
+        foreach (VirtualFsNode child in dirNode.Children) {
+            string childPath = string.IsNullOrEmpty(dirPath) ? child.Name : $"{dirPath}/{child.Name}";
+            bool deleted = parentDeleted || child.IsDeleted;
+            if (child.IsDir) {
+                (int dirs, int images) = ArchiveSession.CountVirtualRecursive(child);
+                yield return new NodeChild(
+                    childPath,
+                    child.Name,
+                    RepackerNodeKind.Directory,
+                    RepackerPropertyKind.None,
+                    RepackerNodeKind.Directory.GetShortName(),
+                    DisplayValue: string.Empty,
+                    child.Children.Count,
+                    SizeBytes: 0,
+                    deleted ? RepackerChangeState.Deleted : session.GetDirectoryChangeState(childPath, child),
+                    dirs,
+                    images);
+            } else {
+                int size = session.GetImageSize(childPath);
+                yield return new NodeChild(
+                    childPath,
+                    child.Name,
+                    RepackerNodeKind.Image,
+                    RepackerPropertyKind.Object,
+                    RepackerNodeKind.Image.GetShortName(),
+                    FormatByteSize(size),
+                    ChildCount: 0,
+                    size,
+                    session.GetImageChangeState(childPath, deleted));
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Children of a property (or .img root) inside an image
+    // -------------------------------------------------------------------------
+
+    /// <summary>
+    /// Direct children of <paramref name="target"/>: Convex items, or named properties merged with deleted properties
+    /// (which are still listed, flagged as deleted, at their original position).
+    /// </summary>
+    internal static IEnumerable<NodeChild> DescribePropertyChildren(
+        ArchiveSession session,
+        string imgPath,
+        string subPath,
+        WzValue target,
+        bool parentDeleted) {
+        if (target is WzValue.Convex(var items)) {
+            for (int i = 0; i < items.Count; i++) {
+                string itemName = i.ToString(CultureInfo.InvariantCulture);
+                yield return DescribeProperty(session, imgPath, JoinSubPath(subPath, itemName), itemName, items[i], parentDeleted);
+            }
+            yield break;
+        }
+
+        foreach ((string name, string propSubPath, WzValue value, bool deleted) in BuildMergedChildProperties(session, imgPath, subPath, target, parentDeleted)) {
+            yield return DescribeProperty(session, imgPath, propSubPath, name, value, deleted);
+        }
+    }
+
+    private static NodeChild DescribeProperty(ArchiveSession session, string imgPath, string propSubPath, string name, WzValue value, bool deleted) {
+        (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(value);
+        int childCount = GetChildCount(value) + session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
+        return new NodeChild(
+            $"{imgPath}/{propSubPath}",
+            name,
+            RepackerNodeKind.Property,
+            kind,
+            badge,
+            display,
+            childCount,
+            GetPayloadSize(value),
+            EvaluatePropertyChangeState(session, imgPath, propSubPath, value, deleted));
+    }
+
+    private static List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> BuildMergedChildProperties(
+        ArchiveSession session,
+        string imgPath,
+        string parentSubPath,
+        WzValue target,
+        bool parentDeleted) {
+        var list = new List<(string Name, string SubPath, WzValue Value, bool IsDeleted)>();
+        if (target.Children is { } props) {
+            foreach (WzProperty prop in props) {
+                list.Add((prop.Name, JoinSubPath(parentSubPath, prop.Name), prop.Value, parentDeleted));
+            }
+        }
+
+        foreach (DeletedPropertyEntry del in session.GetDeletedDirectChildProperties(imgPath, parentSubPath)) {
+            if (list.Any(item => string.Equals(item.Name, del.Name, StringComparison.Ordinal))) {
+                continue;
+            }
+            list.Insert(Math.Clamp(del.OriginalIndex, 0, list.Count), (del.Name, del.SubPath, del.Value, true));
+        }
+        return list;
+    }
+
+    // -------------------------------------------------------------------------
+    // Mapping to DTOs
+    // -------------------------------------------------------------------------
+
+    internal static TreeNodeDto ToTreeNode(this NodeChild c, string archiveId) =>
+        new(
+            archiveId,
+            c.Path,
+            c.Name,
+            c.NodeKind,
+            c.PropertyKind,
+            c.NodeKind == RepackerNodeKind.Directory ? $"{c.DirectoryCount + c.ImageCount} items" : c.DisplayValue,
+            c.TypeBadge,
+            HasChildren: c.NodeKind == RepackerNodeKind.Image || c.ChildCount > 0,
+            c.ChildCount,
+            c.ChangeState,
+            c.SizeBytes);
+
+    internal static SubPropertyRowDto ToChildRow(this NodeChild c) =>
+        new(
+            c.Name,
+            c.Path,
+            c.NodeKind,
+            c.PropertyKind,
+            c.TypeBadge,
+            c.NodeKind == RepackerNodeKind.Directory ? $"{c.DirectoryCount} dirs, {c.ImageCount} images" : c.DisplayValue,
+            c.ChildCount,
+            c.SizeBytes,
+            c.ChangeState);
+
+    // -------------------------------------------------------------------------
+    // Change state & errors
+    // -------------------------------------------------------------------------
+
     internal static RepackerChangeState EvaluatePropertyChangeState(
         ArchiveSession session,
         string imgPath,
@@ -36,116 +192,6 @@ internal static class NodeDtoBuilder {
             return RepackerChangeState.Added;
         }
         return !propVal.Equals(origProp) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
-    }
-
-    internal static List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> BuildMergedChildProperties(
-        ArchiveSession session,
-        string imgPath,
-        string parentSubPath,
-        WzValue target,
-        bool parentDeleted) {
-        var list = new List<(string Name, string SubPath, WzValue Value, bool IsDeleted)>();
-        IReadOnlyList<WzProperty>? props = target.Children;
-        if (props is not null) {
-            foreach (WzProperty prop in props) {
-                string propSubPath = string.IsNullOrEmpty(parentSubPath) ? prop.Name : $"{parentSubPath}/{prop.Name}";
-                list.Add((prop.Name, propSubPath, prop.Value, parentDeleted));
-            }
-        }
-
-        IReadOnlyList<DeletedPropertyEntry> deletedProps = session.GetDeletedDirectChildProperties(imgPath, parentSubPath);
-        foreach (DeletedPropertyEntry del in deletedProps) {
-            if (list.Any(item => string.Equals(item.Name, del.Name, StringComparison.Ordinal))) {
-                continue;
-            }
-            int insertIdx = Math.Clamp(del.OriginalIndex, 0, list.Count);
-            list.Insert(insertIdx, (del.Name, del.SubPath, del.Value, true));
-        }
-
-        return list;
-    }
-
-    internal static TreeNodeDto BuildPropertyTreeNodeDto(
-        ArchiveSession session,
-        string imgPath,
-        string propSubPath,
-        string path,
-        string name,
-        WzValue val,
-        RepackerChangeState changeState = RepackerChangeState.Unchanged) {
-        (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(val);
-        int liveChildCount = val switch {
-            WzValue.Object(var p) => p.Count,
-            WzValue.Canvas c => c.Properties.Count,
-            WzValue.Convex(var items) => items.Count,
-            _ => 0,
-        };
-        int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
-        int childCount = liveChildCount + deletedChildCount;
-        int sizeBytes = val switch {
-            WzValue.Canvas c => c.Payload.Length,
-            WzValue.Sound s => s.DataLength,
-            WzValue.RawData r => r.DataLength,
-            _ => 0,
-        };
-
-        return new TreeNodeDto(
-            session.ArchiveId,
-            path,
-            name,
-            RepackerNodeKind.Property,
-            kind,
-            display,
-            badge,
-            childCount > 0,
-            childCount,
-            changeState,
-            sizeBytes);
-    }
-
-    internal static SubPropertyRowDto[] BuildChildRows(
-        ArchiveSession session,
-        string imgPath,
-        string subPath,
-        WzValue target,
-        bool parentDeleted = false) {
-        if (target is WzValue.Convex(var items)) {
-            var rows = new SubPropertyRowDto[items.Count];
-            for (int i = 0; i < items.Count; i++) {
-                string itemName = i.ToString(CultureInfo.InvariantCulture);
-                string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
-                string itemPath = $"{imgPath}/{itemSubPath}";
-                (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(items[i]);
-                RepackerChangeState itemState = EvaluatePropertyChangeState(session, imgPath, itemSubPath, items[i], parentDeleted);
-                rows[i] = new SubPropertyRowDto(itemName, itemPath, RepackerNodeKind.Property, pk, badge, disp, 0, 0, itemState);
-            }
-            return rows;
-        }
-
-        List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> mergedProps =
-            BuildMergedChildProperties(session, imgPath, subPath, target, parentDeleted);
-        if (mergedProps.Count == 0) {
-            return [];
-        }
-
-        var output = new SubPropertyRowDto[mergedProps.Count];
-        for (int i = 0; i < mergedProps.Count; i++) {
-            (string pName, string pSubPath, WzValue pVal, bool pDeleted) = mergedProps[i];
-            string pPath = $"{imgPath}/{pSubPath}";
-            (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(pVal);
-            int liveChildCount = pVal.Children?.Count ?? (pVal is WzValue.Convex(var ci) ? ci.Count : 0);
-            int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, pSubPath).Count;
-            int childCount = liveChildCount + deletedChildCount;
-            int sz = pVal switch {
-                WzValue.Canvas c => c.Payload.Length,
-                WzValue.Sound s => s.DataLength,
-                WzValue.RawData r => r.DataLength,
-                _ => 0,
-            };
-            RepackerChangeState pState = EvaluatePropertyChangeState(session, imgPath, pSubPath, pVal, pDeleted);
-            output[i] = new SubPropertyRowDto(pName, pPath, RepackerNodeKind.Property, pk, badge, disp, childCount, sz, pState);
-        }
-        return output;
     }
 
     internal static NodeInspectionDto ErrorInspection(string archiveId, string path, string error) =>
@@ -177,4 +223,7 @@ internal static class NodeDtoBuilder {
             null,
             null,
             []);
+
+    private static string JoinSubPath(string parent, string child) =>
+        string.IsNullOrEmpty(parent) ? child : $"{parent}/{child}";
 }

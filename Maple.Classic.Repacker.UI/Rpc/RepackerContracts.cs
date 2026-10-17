@@ -3,16 +3,22 @@ using Maple.Classic.Repacker.Engine.Models;
 
 namespace Maple.Classic.Repacker.UI.Rpc;
 
+/// <summary>
+/// Workspace status pushed to a client over the WebSocket. Built by <see cref="StatusDeltaTracker"/> as a delta: null
+/// sections are unchanged since the client's previous status, <see cref="Logs"/> holds only new entries (after the client
+/// drops its existing ones if <see cref="LogsReset"/>), and the first status after connecting is a full snapshot.
+/// </summary>
 public sealed record WorkspaceStatusPayloadDto(
     string Type,
     long StateVersion,
     string? SelectedArchiveId,
     string SelectedNodePath,
-    ArchiveSummaryDto[] Archives,
-    ClipboardStateDto Clipboard,
+    ArchiveSummaryDto[]? Archives,
+    ClipboardStateDto? Clipboard,
     RepackerLogEntry[] Logs,
-    SavedRepackerUiStateDto UiState,
-    string[] RecentPaths,
+    bool LogsReset,
+    SavedRepackerUiStateDto? UiState,
+    string[]? RecentPaths,
     bool SupportsNativeDialogs = false);
 
 public sealed record RpcOperationResponse(
@@ -24,28 +30,27 @@ public sealed record RpcOperationResponse(
     ArchiveSummaryDto? Archive = null,
     ArchiveSummaryDto[]? Archives = null,
     ClipboardStateDto? Clipboard = null,
-    WorkspaceStatusPayloadDto? Status = null,
     bool Cancelled = false,
-    string[]? FilePaths = null);
+    string[]? FilePaths = null) : IResultDto;
 
 public sealed record TreeChildrenResponse(
     bool Ok,
     string? Error,
     string ArchiveId,
     string ParentPath,
-    TreeNodeDto[] Nodes);
+    TreeNodeDto[] Nodes) : IResultDto;
 
 public sealed record SearchResponseDto(
     bool Ok,
     string? Error,
-    SearchResultItemDto[] Results);
+    SearchResultItemDto[] Results) : IResultDto;
 
 public sealed record BinaryExportResponseDto(
     bool Ok,
     string? Error,
     string FileName,
     string MimeType,
-    byte[] Data);
+    byte[] Data) : IResultDto;
 
 public sealed class OpenArchiveFileRequest {
     public string? FilePath { get; set; }

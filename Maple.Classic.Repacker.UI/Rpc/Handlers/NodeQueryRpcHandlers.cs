@@ -7,24 +7,20 @@ namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 /// </summary>
 internal static class NodeQueryRpcHandlers {
     public static void Register(RpcRouter router) {
-        router.Map(RpcMethod.TreeChildren, TreeChildren);
-        router.Map(RpcMethod.NodeInspect, NodeInspect);
+        router.Map<NodeRefRequest>(RpcMethod.TreeChildren, TreeChildren);
+        router.Map<NodeRefRequest>(RpcMethod.NodeInspect, Inspect);
     }
 
-    private static (bool Ok, object? Data) TreeChildren(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    private static TreeChildrenResponse TreeChildren(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string parentPath = req.Path ?? string.Empty;
-        TreeNodeDto[] children = ctx.Workspace.GetTreeChildren(archiveId, parentPath);
-        return (true, new TreeChildrenResponse(true, null, archiveId, parentPath, children));
+        return new TreeChildrenResponse(true, null, archiveId, parentPath, ctx.Workspace.GetTreeChildren(archiveId, parentPath));
     }
 
-    private static (bool Ok, object? Data) NodeInspect(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        NodeRefRequest req = RpcSerializer.DecodeParams<NodeRefRequest>(rawParams);
+    private static NodeInspectionDto Inspect(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string path = req.Path ?? string.Empty;
         ctx.Workspace.SelectNode(archiveId, path);
-        NodeInspectionDto dto = ctx.Workspace.InspectNode(archiveId, path);
-        return (dto.Ok, dto);
+        return ctx.Workspace.InspectNode(archiveId, path);
     }
 }

@@ -1,5 +1,3 @@
-using Maple.Classic.Repacker.Engine.Models;
-
 namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 
 /// <summary>
@@ -7,20 +5,19 @@ namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 /// </summary>
 internal static class SessionRpcHandlers {
     public static void Register(RpcRouter router) {
-        router.Map(RpcMethod.LogsClear, LogsClear);
-        router.Map(RpcMethod.UiSaveState, UiSaveState);
+        router.Map(RpcMethod.LogsClear, ClearLogs);
+        router.Map<SaveUiStateRequest>(RpcMethod.UiSaveState, SaveUiState);
     }
 
-    private static (bool Ok, object? Data) LogsClear(RpcContext ctx, ReadOnlyMemory<byte> _) {
+    private static RpcOperationResponse ClearLogs(RpcContext ctx) {
         ctx.Workspace.ClearLogs();
-        return (true, new RpcOperationResponse(Ok: true, Status: ctx.BuildStatus()));
+        return ctx.Result(null);
     }
 
-    private static (bool Ok, object? Data) UiSaveState(RpcContext ctx, ReadOnlyMemory<byte> rawParams) {
-        SaveUiStateRequest req = RpcSerializer.DecodeParams<SaveUiStateRequest>(rawParams);
+    private static RpcOperationResponse SaveUiState(RpcContext ctx, SaveUiStateRequest req) {
         if (req.UiState is not null) {
             ctx.Settings.UpdateUiState(req.UiState);
         }
-        return (true, new RpcOperationResponse(Ok: true));
+        return new RpcOperationResponse(Ok: true);
     }
 }
