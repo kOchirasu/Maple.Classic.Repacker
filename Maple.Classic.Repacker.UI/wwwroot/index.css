@@ -1,4 +1,5 @@
 :root {
+    color-scheme: dark;
     --bg-app: #14161a;
     --bg-panel: #191c22;
     --bg-elevated: #20242c;
@@ -22,6 +23,31 @@
 
 *, *::before, *::after {
     box-sizing: border-box;
+    scrollbar-color: #323844 #15181e;
+    scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+}
+
+::-webkit-scrollbar-track {
+    background: #15181e;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #323844;
+    border-radius: 5px;
+    border: 2px solid #15181e;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #434b5a;
+}
+
+::-webkit-scrollbar-corner {
+    background: #15181e;
 }
 
 html, body {
@@ -266,6 +292,17 @@ body.resizing-row {
     border-color: var(--accent-amber);
 }
 
+.cmd-btn.danger {
+    background: #3d1e22;
+    border-color: #7a333b;
+    color: #ff9ea5;
+}
+
+.cmd-btn.danger:hover:not(:disabled) {
+    background: #52262c;
+    border-color: var(--accent-red);
+}
+
 .cmd-btn.full-width {
     width: 100%;
 }
@@ -474,6 +511,24 @@ body.resizing-row {
     height: 6px;
     border-radius: 50%;
     background: var(--accent-amber);
+}
+
+.archive-pill-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    margin-left: 2px;
+    border-radius: 3px;
+    color: var(--text-muted);
+    font-size: 12px;
+    line-height: 1;
+}
+
+.archive-pill-close:hover {
+    background: rgba(224, 108, 117, 0.22);
+    color: var(--accent-red);
 }
 
 .tree-filter-bar {

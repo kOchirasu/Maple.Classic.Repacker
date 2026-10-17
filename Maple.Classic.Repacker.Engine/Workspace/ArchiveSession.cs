@@ -8,6 +8,8 @@ public sealed class VirtualFsNode(string name, WzNodeKind kind, WzNode? backingN
     public WzNodeKind Kind { get; } = kind;
     public WzNode? BackingNode { get; set; } = backingNode;
     public List<VirtualFsNode> Children { get; } = [];
+    public string? DiskDirectoryPath { get; set; }
+    public bool IsDiskLinked { get; set; }
 
     public bool IsDir => Kind == WzNodeKind.Directory;
     public bool IsImage => Kind == WzNodeKind.Image;
@@ -15,7 +17,7 @@ public sealed class VirtualFsNode(string name, WzNodeKind kind, WzNode? backingN
 
 /// <summary>
 /// Represents an open WZ archive in the Repacker workspace with lazy-loaded mutable <see cref="WzValue"/> trees,
-/// virtual directory/image tracking, and per-image undo/redo history.
+/// virtual directory/image tracking, automatic split/directory <c>.wz</c> linking, and per-image undo/redo history.
 /// </summary>
 public sealed class ArchiveSession : IDisposable {
     private const int MaxUndoDepth = 32;
@@ -24,6 +26,9 @@ public sealed class ArchiveSession : IDisposable {
     private readonly HashSet<string> modifiedImages = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Stack<byte[]>> undoStacks = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Stack<byte[]>> redoStacks = new(StringComparer.Ordinal);
+    private readonly List<WzArchive> linkedArchives = [];
+    private readonly HashSet<string> openedArchivePaths = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ushort? explicitVersion;
 
     public string ArchiveId { get; }
     public string Name { get; set; }
@@ -35,12 +40,302 @@ public sealed class ArchiveSession : IDisposable {
     public bool IsModified => HasStructureChanges || modifiedImages.Count > 0;
     public int ModifiedImageCount => modifiedImages.Count;
 
-    public ArchiveSession(string archiveId, string name, string filePath, WzArchive archive) {
+    public ArchiveSession(string archiveId, string name, string filePath, WzArchive archive, ushort? version = null) {
         ArchiveId = archiveId;
         Name = name;
         FilePath = filePath;
         Archive = archive;
+        explicitVersion = version;
         VirtualRoot = BuildVirtualTree(archive.Root);
+
+        if (!string.IsNullOrWhiteSpace(filePath)) {
+            string fullPath = Path.GetFullPath(filePath);
+            openedArchivePaths.Add(fullPath);
+            string? dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir)) {
+                VirtualRoot.DiskDirectoryPath = dir;
+                AssignChildDiskDirectories(VirtualRoot, isRoot: true);
+                EnsureDirectoryLinkedWithChildren(VirtualRoot);
+            }
+        }
+    }
+
+    public bool HasLinkedFile(string filePath) {
+        if (string.IsNullOrWhiteSpace(filePath)) {
+            return false;
+        }
+        return openedArchivePaths.Contains(Path.GetFullPath(filePath));
+    }
+
+    public bool HasLinkedOrSubdirectoryFile(string filePath) {
+        if (string.IsNullOrWhiteSpace(filePath)) {
+            return false;
+        }
+        string fullPath = Path.GetFullPath(filePath);
+        if (openedArchivePaths.Contains(fullPath)) {
+            return true;
+        }
+        if (string.IsNullOrEmpty(VirtualRoot.DiskDirectoryPath)) {
+            return false;
+        }
+
+        string rootDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VirtualRoot.DiskDirectoryPath));
+        string rootPrefix = rootDir + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) {
+            return false;
+        }
+
+        string rel = fullPath[rootPrefix.Length..];
+        int firstSep = rel.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]);
+        if (firstSep <= 0) {
+            return false;
+        }
+
+        string firstSubDir = rel[..firstSep];
+        return VirtualRoot.Children.Any(c =>
+            c.IsDir && string.Equals(c.Name, firstSubDir, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static string StripNumericShardSuffix(string stem) {
+        int lastUnderscore = stem.LastIndexOf('_');
+        if (lastUnderscore <= 0 || lastUnderscore == stem.Length - 1) {
+            return stem;
+        }
+        ReadOnlySpan<char> suffix = stem.AsSpan(lastUnderscore + 1);
+        foreach (char c in suffix) {
+            if (!char.IsAsciiDigit(c)) {
+                return stem;
+            }
+        }
+        return stem[..lastUnderscore];
+    }
+
+    private void AssignChildDiskDirectories(VirtualFsNode dirNode, bool isRoot = false) {
+        string? diskDir = dirNode.DiskDirectoryPath;
+        if (string.IsNullOrEmpty(diskDir) || !Directory.Exists(diskDir)) {
+            return;
+        }
+
+        string dirStem = isRoot
+            ? StripNumericShardSuffix(Path.GetFileNameWithoutExtension(Name))
+            : StripNumericShardSuffix(dirNode.Name);
+
+        foreach (VirtualFsNode child in dirNode.Children) {
+            if (!child.IsDir) {
+                continue;
+            }
+            if (!string.IsNullOrEmpty(child.DiskDirectoryPath) && Directory.Exists(child.DiskDirectoryPath)) {
+                continue;
+            }
+
+            string directSubDir = Path.Combine(diskDir, child.Name);
+            if (Directory.Exists(directSubDir)) {
+                child.DiskDirectoryPath = directSubDir;
+                continue;
+            }
+
+            // If this is a root archive inside Data/<Stem>/<Stem>.wz (such as Data/Base/Base.wz),
+            // DIR nodes like "Character", "Map", "String" live in sibling directories Data/<ChildName>.
+            if (isRoot &&
+                string.Equals(Path.GetFileName(diskDir), dirStem, StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(child.Name, dirStem, StringComparison.OrdinalIgnoreCase)) {
+                string? parentDataDir = Path.GetDirectoryName(diskDir);
+                if (!string.IsNullOrEmpty(parentDataDir)) {
+                    string siblingDir = Path.Combine(parentDataDir, child.Name);
+                    if (Directory.Exists(siblingDir)) {
+                        child.DiskDirectoryPath = siblingDir;
+                    }
+                }
+            }
+        }
+    }
+
+    public bool EnsureDirectoryLinkedWithChildren(VirtualFsNode dirNode) {
+        if (!dirNode.IsDir) {
+            return false;
+        }
+        bool changed = EnsureDirectoryLinked(dirNode);
+        for (int i = 0; i < dirNode.Children.Count; i++) {
+            VirtualFsNode child = dirNode.Children[i];
+            if (child.IsDir && EnsureDirectoryLinked(child)) {
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    public bool EnsureDirectoryLinked(VirtualFsNode dirNode) {
+        if (!dirNode.IsDir || dirNode.IsDiskLinked) {
+            return false;
+        }
+        dirNode.IsDiskLinked = true;
+
+        bool isRoot = ReferenceEquals(dirNode, VirtualRoot);
+        string targetStem = isRoot
+            ? StripNumericShardSuffix(Path.GetFileNameWithoutExtension(Name))
+            : StripNumericShardSuffix(dirNode.Name);
+
+        bool linkedAny = false;
+        string? diskDir = dirNode.DiskDirectoryPath;
+
+        if (!string.IsNullOrEmpty(diskDir) && Directory.Exists(diskDir)) {
+            try {
+                string[] wzFiles = OrderWzFiles(Directory.GetFiles(diskDir, "*.wz", SearchOption.TopDirectoryOnly)).ToArray();
+                foreach (string wzFile in wzFiles) {
+                    string fullWzPath = Path.GetFullPath(wzFile);
+                    if (openedArchivePaths.Contains(fullWzPath)) {
+                        continue;
+                    }
+
+                    string fileStem = Path.GetFileNameWithoutExtension(fullWzPath);
+                    string baseFileStem = StripNumericShardSuffix(fileStem);
+
+                    if (string.Equals(baseFileStem, targetStem, StringComparison.OrdinalIgnoreCase)) {
+                        if (TryOpenAndMergeArchive(fullWzPath, dirNode)) {
+                            linkedAny = true;
+                        }
+                    } else if (string.Equals(baseFileStem, $"{targetStem}_Canvas", StringComparison.OrdinalIgnoreCase) ||
+                               string.Equals(baseFileStem, $"{targetStem}__Canvas", StringComparison.OrdinalIgnoreCase)) {
+                        VirtualFsNode canvasDir = GetOrCreateChildDirectory(dirNode, "_Canvas");
+                        if (TryOpenAndMergeArchive(fullWzPath, canvasDir)) {
+                            linkedAny = true;
+                        }
+                    } else if (!isRoot) {
+                        // In a dedicated subdirectory for a DIR node, if there is no child directory matching baseFileStem,
+                        // merge the .wz file directly into this DIR node.
+                        string potentialSubDir = Path.Combine(diskDir, baseFileStem);
+                        bool matchesChildDir = Directory.Exists(potentialSubDir) ||
+                            dirNode.Children.Any(c => c.IsDir && string.Equals(c.Name, baseFileStem, StringComparison.OrdinalIgnoreCase));
+                        if (!matchesChildDir && TryOpenAndMergeArchive(fullWzPath, dirNode)) {
+                            linkedAny = true;
+                        }
+                    }
+                }
+
+                // Also discover subdirectories on disk that contain .wz files
+                foreach (string subDirPath in Directory.GetDirectories(diskDir).OrderBy(static d => d, StringComparer.OrdinalIgnoreCase)) {
+                    string subDirName = Path.GetFileName(subDirPath);
+                    VirtualFsNode? existingDir = dirNode.Children.Find(c =>
+                        c.IsDir && string.Equals(c.Name, subDirName, StringComparison.OrdinalIgnoreCase));
+                    if (existingDir is not null) {
+                        existingDir.DiskDirectoryPath ??= subDirPath;
+                    } else if (!isRoot && DirectoryContainsWzFiles(subDirPath)) {
+                        var subNode = new VirtualFsNode(subDirName, WzNodeKind.Directory) {
+                            DiskDirectoryPath = subDirPath,
+                        };
+                        dirNode.Children.Add(subNode);
+                        linkedAny = true;
+                    } else if (isRoot && VirtualRoot.Children.Count == 0 && DirectoryContainsWzFiles(subDirPath)) {
+                        var subNode = new VirtualFsNode(subDirName, WzNodeKind.Directory) {
+                            DiskDirectoryPath = subDirPath,
+                        };
+                        dirNode.Children.Add(subNode);
+                        linkedAny = true;
+                    }
+                }
+            } catch {
+                // Ignore IO access errors on restricted directories
+            }
+        } else if (!isRoot && !string.IsNullOrEmpty(VirtualRoot.DiskDirectoryPath) && Directory.Exists(VirtualRoot.DiskDirectoryPath)) {
+            // Flat directory fallback: check if <DirName>.wz / <DirName>_000.wz or <RootStem>_Canvas_000.wz exist in root folder
+            string rootDiskDir = VirtualRoot.DiskDirectoryPath;
+            string rootStem = StripNumericShardSuffix(Path.GetFileNameWithoutExtension(Name));
+            try {
+                string[] wzFiles = OrderWzFiles(Directory.GetFiles(rootDiskDir, "*.wz", SearchOption.TopDirectoryOnly)).ToArray();
+                foreach (string wzFile in wzFiles) {
+                    string fullWzPath = Path.GetFullPath(wzFile);
+                    if (openedArchivePaths.Contains(fullWzPath)) {
+                        continue;
+                    }
+
+                    string fileStem = Path.GetFileNameWithoutExtension(fullWzPath);
+                    string baseFileStem = StripNumericShardSuffix(fileStem);
+
+                    bool matchesDir = string.Equals(baseFileStem, targetStem, StringComparison.OrdinalIgnoreCase) ||
+                        ((string.Equals(targetStem, "_Canvas", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(targetStem, "Canvas", StringComparison.OrdinalIgnoreCase)) &&
+                         (string.Equals(baseFileStem, $"{rootStem}_Canvas", StringComparison.OrdinalIgnoreCase) ||
+                          string.Equals(baseFileStem, $"{rootStem}__Canvas", StringComparison.OrdinalIgnoreCase)));
+
+                    if (matchesDir && TryOpenAndMergeArchive(fullWzPath, dirNode)) {
+                        linkedAny = true;
+                    }
+                }
+            } catch {
+                // Ignore IO errors
+            }
+        }
+
+        AssignChildDiskDirectories(dirNode, isRoot);
+        return linkedAny;
+    }
+
+    private bool TryOpenAndMergeArchive(string fullWzPath, VirtualFsNode targetDir) {
+        try {
+            var linkedWz = new WzArchive(fullWzPath, explicitVersion);
+            openedArchivePaths.Add(fullWzPath);
+            linkedArchives.Add(linkedWz);
+            MergeWzNodeChildrenIntoVirtualDir(targetDir, linkedWz.Root.Children);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private static VirtualFsNode GetOrCreateChildDirectory(VirtualFsNode parent, string dirName) {
+        VirtualFsNode? existing = parent.Children.Find(c =>
+            c.IsDir && string.Equals(c.Name, dirName, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null) {
+            return existing;
+        }
+        var created = new VirtualFsNode(dirName, WzNodeKind.Directory);
+        parent.Children.Add(created);
+        return created;
+    }
+
+    private static void MergeWzNodeChildrenIntoVirtualDir(VirtualFsNode targetDir, IReadOnlyList<WzNode> wzChildren) {
+        foreach (WzNode child in wzChildren) {
+            if (child.IsDir) {
+                VirtualFsNode? existingDir = targetDir.Children.Find(c =>
+                    c.IsDir && string.Equals(c.Name, child.Name, StringComparison.OrdinalIgnoreCase));
+                if (existingDir is null) {
+                    existingDir = new VirtualFsNode(child.Name, WzNodeKind.Directory, child);
+                    targetDir.Children.Add(existingDir);
+                } else {
+                    existingDir.BackingNode ??= child;
+                }
+
+                if (child.Children.Count > 0) {
+                    MergeWzNodeChildrenIntoVirtualDir(existingDir, child.Children);
+                }
+            } else {
+                VirtualFsNode? existingImg = targetDir.Children.Find(c =>
+                    c.IsImage && string.Equals(c.Name, child.Name, StringComparison.OrdinalIgnoreCase));
+                if (existingImg is null) {
+                    targetDir.Children.Add(new VirtualFsNode(child.Name, WzNodeKind.Image, child));
+                } else if ((existingImg.BackingNode is null || existingImg.BackingNode.Size == 0) && child.Size > 0) {
+                    existingImg.BackingNode = child;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<string> OrderWzFiles(IEnumerable<string> paths) {
+        return paths
+            .OrderBy(static p => {
+                string stem = Path.GetFileNameWithoutExtension(p);
+                string baseStem = StripNumericShardSuffix(stem);
+                return string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+            })
+            .ThenBy(static p => Path.GetFileNameWithoutExtension(p), StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static bool DirectoryContainsWzFiles(string dirPath) {
+        try {
+            return Directory.EnumerateFiles(dirPath, "*.wz", SearchOption.AllDirectories).Any();
+        } catch {
+            return false;
+        }
     }
 
     private static VirtualFsNode BuildVirtualTree(WzNode wzNode) {
@@ -98,6 +393,7 @@ public sealed class ArchiveSession : IDisposable {
 
     public VirtualFsNode? ResolveVirtualNode(ReadOnlySpan<char> path) {
         path = path.Trim('/');
+        EnsureDirectoryLinked(VirtualRoot);
         if (path.IsEmpty) {
             return VirtualRoot;
         }
@@ -108,6 +404,9 @@ public sealed class ArchiveSession : IDisposable {
             if (part.IsEmpty) {
                 continue;
             }
+            if (cur.IsDir) {
+                EnsureDirectoryLinked(cur);
+            }
             VirtualFsNode? next = null;
             foreach (VirtualFsNode child in cur.Children) {
                 if (child.Name.AsSpan().SequenceEqual(part)) {
@@ -116,7 +415,18 @@ public sealed class ArchiveSession : IDisposable {
                 }
             }
             if (next is null) {
+                foreach (VirtualFsNode child in cur.Children) {
+                    if (child.Name.AsSpan().Equals(part, StringComparison.OrdinalIgnoreCase)) {
+                        next = child;
+                        break;
+                    }
+                }
+            }
+            if (next is null) {
                 return null;
+            }
+            if (next.IsDir) {
+                EnsureDirectoryLinked(next);
             }
             cur = next;
         }
@@ -155,7 +465,7 @@ public sealed class ArchiveSession : IDisposable {
         }
 
         WzValue parsed = vNode.BackingNode is not null
-            ? Archive.ParseImage(vNode.BackingNode)
+            ? vNode.BackingNode.ParseImage()
             : new WzValue.Object();
         loadedImages[norm] = parsed;
         return parsed;
@@ -168,7 +478,7 @@ public sealed class ArchiveSession : IDisposable {
         }
         VirtualFsNode? vNode = ResolveVirtualNode(norm);
         if (vNode?.BackingNode is not null) {
-            return Archive.GetImageMemory(vNode.BackingNode);
+            return vNode.BackingNode.GetMemory();
         }
         if (loadedImages.TryGetValue(norm, out WzValue? loaded)) {
             return loaded.ToBytes();
@@ -397,6 +707,7 @@ public sealed class ArchiveSession : IDisposable {
         using var outArchive = new WzArchive(targetVersion);
 
         void CollectRecursive(VirtualFsNode dir, string prefix) {
+            EnsureDirectoryLinked(dir);
             foreach (VirtualFsNode child in dir.Children) {
                 string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
                 if (child.IsDir) {
@@ -405,7 +716,7 @@ public sealed class ArchiveSession : IDisposable {
                     if (modifiedImages.Contains(fullPath) && loadedImages.TryGetValue(fullPath, out WzValue? modifiedVal)) {
                         outArchive.SetImage(fullPath, modifiedVal);
                     } else if (child.BackingNode is not null) {
-                        outArchive.SetImage(fullPath, Archive.GetImageMemory(child.BackingNode));
+                        outArchive.SetImage(fullPath, child.BackingNode.GetMemory());
                     } else if (loadedImages.TryGetValue(fullPath, out WzValue? newVal)) {
                         outArchive.SetImage(fullPath, newVal);
                     }
@@ -418,8 +729,23 @@ public sealed class ArchiveSession : IDisposable {
 
         if (commitCleanState) {
             Archive.Dispose();
+            foreach (WzArchive linked in linkedArchives) {
+                linked.Dispose();
+            }
+            linkedArchives.Clear();
+            openedArchivePaths.Clear();
+            if (!string.IsNullOrWhiteSpace(FilePath)) {
+                openedArchivePaths.Add(Path.GetFullPath(FilePath));
+            }
             Archive = WzArchive.FromBytes(bytes, Path.GetFileNameWithoutExtension(Name), targetVersion);
             VirtualRoot = BuildVirtualTree(Archive.Root);
+            if (!string.IsNullOrWhiteSpace(FilePath)) {
+                string? rootDir = Path.GetDirectoryName(Path.GetFullPath(FilePath));
+                if (!string.IsNullOrEmpty(rootDir) && Directory.Exists(rootDir)) {
+                    VirtualRoot.DiskDirectoryPath = rootDir;
+                    AssignChildDiskDirectories(VirtualRoot, isRoot: true);
+                }
+            }
             modifiedImages.Clear();
             HasStructureChanges = false;
         }
@@ -456,5 +782,9 @@ public sealed class ArchiveSession : IDisposable {
 
     public void Dispose() {
         Archive.Dispose();
+        foreach (WzArchive linked in linkedArchives) {
+            linked.Dispose();
+        }
+        linkedArchives.Clear();
     }
 }

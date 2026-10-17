@@ -1,6 +1,6 @@
 # Maple.Classic.Repacker
 
-MapleStory Classic World (`mscw`) `.wz` and `.img` repacker, sprite/animation studio, and property editor inspired by [HaRepacker-resurrected](https://github.com/lastbattle/Harepacker-resurrected), built on C# (`.NET 10`), MessagePack-over-WebSockets RPC, and an Electron / WebView2 frontend.
+MapleStory Classic World (`mscw`) `.wz` and `.img` repacker, sprite/animation studio, and property editor built on C# (`.NET 10`), MessagePack-over-WebSockets RPC, and an Electron / WebView2 frontend.
 
 ## Projects
 

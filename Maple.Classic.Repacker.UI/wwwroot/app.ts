@@ -189,7 +189,34 @@ namespace MapleRepacker {
                 }
             } else {
                 this.renderTree();
+                this.clearStageAndInspector();
             }
+        }
+
+        private clearStageAndInspector(): void {
+            this.selectedPath = '';
+            this.currentInspection = null;
+            this.stopAnimationLoop();
+            this.revokeDecodedFrames();
+
+            document.getElementById('canvasStageSection')?.classList.add('hidden');
+            document.getElementById('soundStageSection')?.classList.add('hidden');
+            document.getElementById('breadcrumbBar')!.innerHTML = '';
+            document.getElementById('stageMetaBadges')!.innerHTML = '';
+            document.getElementById('childrenTableBody')!.innerHTML = '';
+            document.getElementById('inspectorTypePill')!.textContent = 'NONE';
+            document.getElementById('inspectorMetaGrid')!.innerHTML = '';
+            document.getElementById('valueEditorCard')?.classList.add('hidden');
+            (document.getElementById('btnUndo') as HTMLButtonElement).disabled = true;
+            (document.getElementById('btnRedo') as HTMLButtonElement).disabled = true;
+
+            this.lastLoadedJsonText = '{}';
+            if (this.jsonEditor) {
+                this.jsonEditor.setValue('{}');
+            }
+            this.activeHexBytes = new Uint8Array(0);
+            this.selectedHexOffset = 0;
+            this.renderHexInspector();
         }
 
         private renderArchiveTabsStrip(): void {
@@ -212,8 +239,25 @@ namespace MapleRepacker {
                     btn.appendChild(dot);
                 }
 
+                const closeSpan = document.createElement('span');
+                closeSpan.className = 'archive-pill-close';
+                closeSpan.title = `Close ${ar.name}`;
+                closeSpan.innerHTML = '&times;';
+                closeSpan.addEventListener('click', (ev) => {
+                    ev.stopPropagation();
+                    this.closeContextMenu();
+                    void this.requestCloseArchive(ar.archiveId);
+                });
+                btn.appendChild(closeSpan);
+
                 btn.addEventListener('click', () => {
+                    this.closeContextMenu();
                     void this.selectAndInspectNode(ar.archiveId, '', true);
+                });
+                btn.addEventListener('contextmenu', (ev) => {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    this.openContextMenu(ev.clientX, ev.clientY, ar.archiveId, '');
                 });
                 strip.appendChild(btn);
             }
@@ -356,12 +400,13 @@ namespace MapleRepacker {
                     ${ar.isModified ? '<span class="tree-mod-dot" title="Modified"></span>' : ''}
                 `;
 
-                rootRow.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
+                rootRow.addEventListener('click', () => {
+                    this.closeContextMenu();
                     void this.toggleOrSelectTreeNode(ar.archiveId, '', true);
                 });
                 rootRow.addEventListener('contextmenu', (ev) => {
                     ev.preventDefault();
+                    ev.stopPropagation();
                     this.openContextMenu(ev.clientX, ev.clientY, ar.archiveId, '');
                 });
 
@@ -416,13 +461,13 @@ namespace MapleRepacker {
                 `;
 
                 row.addEventListener('click', (ev) => {
-                    ev.stopPropagation();
+                    this.closeContextMenu();
                     const clickedTwisty = (ev.target as HTMLElement).classList.contains('tree-twisty');
                     void this.toggleOrSelectTreeNode(archiveId, node.path, node.hasChildren, clickedTwisty);
                 });
 
-                row.addEventListener('dblclick', (ev) => {
-                    ev.stopPropagation();
+                row.addEventListener('dblclick', () => {
+                    this.closeContextMenu();
                     if (node.hasChildren) {
                         void this.toggleNodeExpansionOnly(archiveId, node.path);
                     }
@@ -430,6 +475,7 @@ namespace MapleRepacker {
 
                 row.addEventListener('contextmenu', (ev) => {
                     ev.preventDefault();
+                    ev.stopPropagation();
                     this.openContextMenu(ev.clientX, ev.clientY, archiveId, node.path);
                 });
 
@@ -1022,6 +1068,16 @@ namespace MapleRepacker {
         private renderPropertyInspector(dto: NodeInspectionDto): void {
             document.getElementById('inspectorTypePill')!.textContent = dto.typeBadge;
 
+            const isArchiveRoot = !dto.path || dto.nodeKind === RepackerNodeKind.Archive;
+            document.getElementById('btnRenameNode')!.classList.toggle('hidden', isArchiveRoot);
+            const deleteBtn = document.getElementById('btnDeleteNode')!;
+            deleteBtn.textContent = isArchiveRoot ? 'Close' : 'Delete';
+            deleteBtn.title = isArchiveRoot ? 'Close WZ archive (Del)' : 'Delete selected node (Del)';
+
+            (document.getElementById('btnInspAddChild') as HTMLButtonElement).disabled = isArchiveRoot;
+            (document.getElementById('btnInspDuplicate') as HTMLButtonElement).disabled = isArchiveRoot;
+            (document.getElementById('btnInspCopy') as HTMLButtonElement).disabled = isArchiveRoot;
+
             const metaGrid = document.getElementById('inspectorMetaGrid')!;
             metaGrid.innerHTML = `
                 <div class="kv-key">Archive</div><div class="kv-val">${this.escapeHtml(dto.archiveName)}</div>
@@ -1204,6 +1260,7 @@ namespace MapleRepacker {
                 const trigger = item.querySelector('.menu-trigger')!;
                 trigger.addEventListener('click', (ev) => {
                     ev.stopPropagation();
+                    this.closeContextMenu();
                     const wasOpen = item.classList.contains('open');
                     items.forEach((other) => other.classList.remove('open'));
                     if (!wasOpen) item.classList.add('open');
@@ -1212,7 +1269,14 @@ namespace MapleRepacker {
 
             document.addEventListener('click', () => {
                 items.forEach((other) => other.classList.remove('open'));
-                document.getElementById('treeContextMenu')!.classList.add('hidden');
+                this.closeContextMenu();
+            });
+
+            document.addEventListener('contextmenu', (ev) => {
+                const target = ev.target as HTMLElement | null;
+                if (!target?.closest('.tree-row') && !target?.closest('#treeContextMenu')) {
+                    this.closeContextMenu();
+                }
             });
 
             menuBar.querySelectorAll('[data-action]').forEach((btn) => {
@@ -1426,14 +1490,28 @@ namespace MapleRepacker {
                 this.renderTree();
             });
 
+            document.getElementById('treeContainer')!.addEventListener('scroll', () => {
+                this.closeContextMenu();
+            });
+
             // Context menu actions
             const ctxMenu = document.getElementById('treeContextMenu')!;
             ctxMenu.querySelectorAll('[data-ctx]').forEach((btn) => {
                 btn.addEventListener('click', async () => {
                     const cmd = (btn as HTMLElement).dataset.ctx || '';
-                    ctxMenu.classList.add('hidden');
-                    if (this.ctxTargetArchiveId) {
-                        await this.selectAndInspectNode(this.ctxTargetArchiveId, this.ctxTargetPath, false);
+                    const targetArchiveId = this.ctxTargetArchiveId;
+                    const targetPath = this.ctxTargetPath;
+                    this.closeContextMenu();
+
+                    if (cmd === 'closeArchive') {
+                        if (targetArchiveId) {
+                            await this.requestCloseArchive(targetArchiveId);
+                        }
+                        return;
+                    }
+
+                    if (targetArchiveId) {
+                        await this.selectAndInspectNode(targetArchiveId, targetPath, false);
                     }
                     switch (cmd) {
                         case 'addProp':
@@ -1461,7 +1539,11 @@ namespace MapleRepacker {
                             await this.inlineLinksInCurrentScope();
                             break;
                         case 'exportAuto':
-                            await this.exportCurrentNode('auto');
+                            if (!targetPath) {
+                                await this.downloadCurrentArchive();
+                            } else {
+                                await this.exportCurrentNode('auto');
+                            }
                             break;
                         case 'delete':
                             await this.deleteSelectedNode();
@@ -1471,10 +1553,29 @@ namespace MapleRepacker {
             });
         }
 
+        private closeContextMenu(): void {
+            document.getElementById('treeContextMenu')?.classList.add('hidden');
+        }
+
         private openContextMenu(x: number, y: number, archiveId: string, path: string): void {
             this.ctxTargetArchiveId = archiveId;
             this.ctxTargetPath = path;
+            const isArchiveRoot = !path;
             const menu = document.getElementById('treeContextMenu')!;
+
+            menu.querySelector('[data-ctx="addProp"]')?.classList.toggle('hidden', isArchiveRoot);
+            menu.querySelector('[data-ctx="copy"]')?.classList.toggle('hidden', isArchiveRoot);
+            menu.querySelector('[data-ctx="duplicate"]')?.classList.toggle('hidden', isArchiveRoot);
+            menu.querySelector('[data-ctx="rename"]')?.classList.toggle('hidden', isArchiveRoot);
+
+            const exportBtn = document.getElementById('ctxExportBtn');
+            if (exportBtn) {
+                exportBtn.textContent = isArchiveRoot ? 'Export .wz Archive...' : 'Export Node...';
+            }
+
+            document.getElementById('ctxDeleteBtn')?.classList.toggle('hidden', isArchiveRoot);
+            document.getElementById('ctxCloseArchiveBtn')?.classList.toggle('hidden', !isArchiveRoot);
+
             menu.classList.remove('hidden');
             const maxX = window.innerWidth - 220;
             const maxY = window.innerHeight - 310;
@@ -1842,6 +1943,12 @@ namespace MapleRepacker {
                     target.tagName === 'SELECT' ||
                     target.closest('.cm-editor') !== null;
 
+                if (ev.key === 'Escape') {
+                    this.closeContextMenu();
+                    this.closeModal();
+                    return;
+                }
+
                 if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === 'f') {
                     ev.preventDefault();
                     this.focusGlobalSearch();
@@ -1993,7 +2100,11 @@ namespace MapleRepacker {
         }
 
         private async deleteSelectedNode(): Promise<void> {
-            if (!this.selectedArchiveId || !this.selectedPath) return;
+            if (!this.selectedArchiveId) return;
+            if (!this.selectedPath) {
+                await this.requestCloseArchive(this.selectedArchiveId);
+                return;
+            }
             const res = await rpcCall<RpcOperationResponse>('node.delete', {
                 archiveId: this.selectedArchiveId,
                 path: this.selectedPath,
@@ -2036,24 +2147,110 @@ namespace MapleRepacker {
 
         private async downloadCurrentArchive(): Promise<void> {
             if (!this.selectedArchiveId) return;
-            const url = `/api/export?archiveId=${encodeURIComponent(this.selectedArchiveId)}&path=&format=wz`;
+            await this.exportAndDownloadArchiveById(this.selectedArchiveId);
+        }
+
+        private async exportAndDownloadArchiveById(archiveId: string, version?: number): Promise<boolean> {
+            const res = await rpcCall<BinaryExportResponseDto>('workspace.exportArchive', {
+                archiveId,
+                version,
+            });
+            if (!res.ok || !res.data?.data) {
+                this.showToast(res.data?.error || 'Failed to export WZ archive', 'error');
+                return false;
+            }
+            const bytes = toUint8Array(res.data.data);
+            const blob = new Blob([bytes as unknown as BlobPart], {
+                type: res.data.mimeType || 'application/octet-stream',
+            });
+            const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = url;
-            a.download = '';
+            a.href = blobUrl;
+            a.download = res.data.fileName || 'Archive.wz';
             document.body.appendChild(a);
             a.click();
             a.remove();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+            return true;
         }
 
         private async closeActiveArchive(): Promise<void> {
             if (!this.selectedArchiveId) return;
+            await this.requestCloseArchive(this.selectedArchiveId);
+        }
+
+        private async requestCloseArchive(archiveId: string): Promise<void> {
+            const ar = this.archives.find((a) => a.archiveId === archiveId);
+            if (!ar) return;
+
+            if (!ar.isModified) {
+                await this.performCloseArchive(ar.archiveId);
+                return;
+            }
+
+            this.openCloseArchivePromptModal(ar);
+        }
+
+        private async performCloseArchive(archiveId: string): Promise<void> {
+            const arName = this.archives.find((a) => a.archiveId === archiveId)?.name || 'archive';
             const res = await rpcCall<RpcOperationResponse>('workspace.closeArchive', {
-                archiveId: this.selectedArchiveId,
+                archiveId,
             });
             if (res.ok) {
-                this.showToast('Closed archive', 'info');
+                const prefix = `${archiveId}::`;
+                for (const key of Array.from(this.treeState.childrenByParent.keys())) {
+                    if (key.startsWith(prefix)) {
+                        this.treeState.childrenByParent.delete(key);
+                    }
+                }
+                for (const key of Array.from(this.treeState.expandedKeys.values())) {
+                    if (key.startsWith(prefix)) {
+                        this.treeState.expandedKeys.delete(key);
+                    }
+                }
+                this.showToast(`Closed "${arName}"`, 'info');
                 this.currentInspection = null;
+                if (res.data?.status) {
+                    await this.handleWorkspaceStatus(res.data.status);
+                }
+            } else {
+                this.showToast(res.data?.error || 'Failed to close archive', 'error');
             }
+        }
+
+        private openCloseArchivePromptModal(ar: ArchiveSummaryDto): void {
+            const modText =
+                ar.modifiedImageCount > 0
+                    ? ` (${ar.modifiedImageCount} modified image${ar.modifiedImageCount === 1 ? '' : 's'})`
+                    : '';
+
+            this.showModal(
+                `Unsaved Changes in "${ar.name}"`,
+                `
+                <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
+                    <strong>${this.escapeHtml(ar.name)}</strong> has unsaved changes${modText}.
+                    Would you like to export the repacked <code>.wz</code> archive before closing?
+                </p>
+                `,
+                `
+                <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
+                <button type="button" class="cmd-btn danger" id="btnModalDiscardClose">Close Without Exporting</button>
+                <button type="button" class="cmd-btn primary" id="btnModalExportClose">Export .wz &amp; Close</button>
+                `
+            );
+
+            document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
+            document.getElementById('btnModalDiscardClose')!.addEventListener('click', async () => {
+                this.closeModal();
+                await this.performCloseArchive(ar.archiveId);
+            });
+            document.getElementById('btnModalExportClose')!.addEventListener('click', async () => {
+                const exported = await this.exportAndDownloadArchiveById(ar.archiveId, ar.version);
+                if (exported) {
+                    this.closeModal();
+                    await this.performCloseArchive(ar.archiveId);
+                }
+            });
         }
 
         // ---------------------------------------------------------------------

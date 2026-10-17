@@ -208,4 +208,215 @@ public sealed class RepackerEngineTests {
         WzValue coatImg = repacked.ParseImage("Coat/01040000.img");
         Assert.NotNull(coatImg["info"]);
     }
+
+    [Fact]
+    public void DirNodes_AutomaticallyLinkAndOpenSplitWzFilesAndSubdirectories() {
+        string tempRoot = Path.Combine(Path.GetTempPath(), $"maple_repacker_dirlink_{Guid.NewGuid():N}");
+        try {
+            string baseDir = Path.Combine(tempRoot, "Base");
+            string charDir = Path.Combine(tempRoot, "Character");
+            string coatDir = Path.Combine(charDir, "Coat");
+            string coatCanvasDir = Path.Combine(coatDir, "_Canvas");
+            string weaponDir = Path.Combine(charDir, "Weapon");
+            string stringDir = Path.Combine(tempRoot, "String");
+
+            Directory.CreateDirectory(baseDir);
+            Directory.CreateDirectory(coatCanvasDir);
+            Directory.CreateDirectory(weaponDir);
+            Directory.CreateDirectory(stringDir);
+
+            // 1. Write Data/String/String.wz (63-byte empty stub) + Data/String/String_000.wz (actual Eqp.img)
+            using (var emptyWz = new WzArchive()) {
+                emptyWz.Save(Path.Combine(stringDir, "String.wz"));
+            }
+            using (var stringShard = new WzArchive()) {
+                var eqpImg = new WzValue.Object();
+                eqpImg["Eqp/Coat/1040000/name"] = "White Undershirt";
+                stringShard.SetImage("Eqp.img", eqpImg);
+                stringShard.Save(Path.Combine(stringDir, "String_000.wz"));
+            }
+
+            // 2. Write Data/Character/Coat/_Canvas/_Canvas_000.wz with real 24x20 sprite
+            byte[] rgba = new byte[24 * 20 * 4];
+            for (int i = 0; i < rgba.Length; i += 4) {
+                rgba[i] = 60;
+                rgba[i + 1] = 140;
+                rgba[i + 2] = 240;
+                rgba[i + 3] = 255;
+            }
+            byte[] encodedSprite = WzCanvasCodec.EncodeFromRgba(24, 20, (int) WzCanvasFormat.Bgra8888, rgba);
+            using (var coatCanvasWz = new WzArchive()) {
+                var canvasImg = new WzValue.Object();
+                canvasImg["stand1/0/mail"] = new WzValue.Canvas(
+                    24,
+                    20,
+                    (int) WzCanvasFormat.Bgra8888,
+                    encodedSprite,
+                    [new WzProperty("origin", (11, 19))]);
+                coatCanvasWz.SetImage("01040000.img", canvasImg);
+                coatCanvasWz.Save(Path.Combine(coatCanvasDir, "_Canvas_000.wz"));
+            }
+
+            // 3. Write Data/Character/Coat/Coat.wz (empty DIR "_Canvas") + Coat_000.wz (01040000.img with _outlink)
+            System.IO.File.WriteAllBytes(Path.Combine(coatDir, "Coat.wz"), BuildDirectoryOnlyWzArchive(["_Canvas"]));
+            using (var coatShard = new WzArchive()) {
+                var coatImg = new WzValue.Object();
+                coatImg["info/islot"] = "Ma";
+                coatImg["stand1/0/mail"] = new WzValue.Canvas(
+                    1,
+                    1,
+                    (int) WzCanvasFormat.Bgra4444,
+                    WzCanvasCodec.EncodeFromRgba(1, 1, (int) WzCanvasFormat.Bgra4444, [0, 0, 0, 0]),
+                    [
+                        new WzProperty("origin", (11, 19)),
+                        new WzProperty("_outlink", "Character/Coat/_Canvas/01040000.img/stand1/0/mail"),
+                    ]);
+                coatShard.SetImage("01040000.img", coatImg);
+                coatShard.Save(Path.Combine(coatDir, "Coat_000.wz"));
+            }
+
+            // 4. Write Data/Character/Weapon/Weapon_000.wz
+            using (var weaponShard = new WzArchive()) {
+                var weaponImg = new WzValue.Object();
+                weaponImg["info/islot"] = "Wp";
+                weaponShard.SetImage("01302000.img", weaponImg);
+                weaponShard.Save(Path.Combine(weaponDir, "Weapon_000.wz"));
+            }
+
+            // 5. Write Data/Character/Character.wz with empty DIR nodes "Coat" and "Weapon"
+            string charWzPath = Path.Combine(charDir, "Character.wz");
+            System.IO.File.WriteAllBytes(charWzPath, BuildDirectoryOnlyWzArchive(["Coat", "Weapon"]));
+
+            // 6. Write Data/Base/Base.wz with empty DIR nodes "Character" and "String"
+            string baseWzPath = Path.Combine(baseDir, "Base.wz");
+            System.IO.File.WriteAllBytes(baseWzPath, BuildDirectoryOnlyWzArchive(["Character", "String"]));
+
+            // Test A: Opening Character.wz directly auto-links Coat, Coat/_Canvas, and Weapon
+            using (var ws = new RepackerWorkspace()) {
+                ArchiveSummaryDto charSummary = ws.OpenArchiveFromFile(charWzPath);
+                Assert.True(charSummary.ImageCount >= 2);
+
+                TreeNodeDto[] rootNodes = ws.GetTreeChildren(charSummary.ArchiveId, "");
+                TreeNodeDto coatNode = Assert.Single(rootNodes, n => n.Name == "Coat");
+                TreeNodeDto weaponNode = Assert.Single(rootNodes, n => n.Name == "Weapon");
+                Assert.True(coatNode.HasChildren);
+                Assert.True(weaponNode.HasChildren);
+
+                TreeNodeDto[] coatChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat");
+                Assert.Contains(coatChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
+                TreeNodeDto canvasDirNode = Assert.Single(coatChildren, n => n.Name == "_Canvas" && n.NodeKind == RepackerNodeKind.Directory);
+                Assert.True(canvasDirNode.HasChildren);
+
+                TreeNodeDto[] canvasChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat/_Canvas");
+                Assert.Contains(canvasChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
+
+                // Verify _outlink inside Coat/01040000.img resolves to Coat/_Canvas/01040000.img
+                NodeInspectionDto mailInspect = ws.InspectNode(charSummary.ArchiveId, "Coat/01040000.img/stand1/0/mail");
+                Assert.True(mailInspect.Ok, mailInspect.Error);
+                Assert.NotNull(mailInspect.Canvas);
+                Assert.Equal(24, mailInspect.Canvas.Width);
+                Assert.Equal(20, mailInspect.Canvas.Height);
+                Assert.Contains("Coat/_Canvas/01040000.img/stand1/0/mail", mailInspect.Canvas.ResolvedLinkPath);
+            }
+
+            // Test B: Opening 63-byte String.wz directly auto-links String_000.wz
+            using (var ws = new RepackerWorkspace()) {
+                ArchiveSummaryDto strSummary = ws.OpenArchiveFromFile(Path.Combine(stringDir, "String.wz"));
+                Assert.Equal(1, strSummary.ImageCount);
+                TreeNodeDto[] strChildren = ws.GetTreeChildren(strSummary.ArchiveId, "");
+                Assert.Contains(strChildren, n => n.Name == "Eqp.img");
+                NodeInspectionDto nameNode = ws.InspectNode(strSummary.ArchiveId, "Eqp.img/Eqp/Coat/1040000/name");
+                Assert.Equal("White Undershirt", nameNode.DisplayValue);
+            }
+
+            // Test C: Opening Base/Base.wz directly auto-links sibling Character and String directories
+            using (var ws = new RepackerWorkspace()) {
+                ArchiveSummaryDto baseSummary = ws.OpenArchiveFromFile(baseWzPath);
+                TreeNodeDto[] baseChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "");
+                Assert.Contains(baseChildren, n => n.Name == "Character" && n.HasChildren);
+                Assert.Contains(baseChildren, n => n.Name == "String" && n.HasChildren);
+
+                TreeNodeDto[] baseCharChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "Character");
+                Assert.Contains(baseCharChildren, n => n.Name == "Coat" && n.HasChildren);
+
+                NodeInspectionDto eqpInspect = ws.InspectNode(baseSummary.ArchiveId, "String/Eqp.img/Eqp/Coat/1040000/name");
+                Assert.True(eqpInspect.Ok, eqpInspect.Error);
+                Assert.Equal("White Undershirt", eqpInspect.DisplayValue);
+            }
+
+            // Test D: OpenDataDirectory on Data/Character opens Character.wz with linked subdirs instead of duplicate shard archives
+            using (var ws = new RepackerWorkspace()) {
+                ArchiveSummaryDto[] opened = ws.OpenDataDirectory(charDir);
+                ArchiveSummaryDto single = Assert.Single(opened);
+                Assert.Equal("Character.wz", single.Name);
+                TreeNodeDto[] coatKids = ws.GetTreeChildren(single.ArchiveId, "Coat");
+                Assert.Contains(coatKids, n => n.Name == "01040000.img");
+            }
+        } finally {
+            if (Directory.Exists(tempRoot)) {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
+    }
+
+    private static byte[] BuildDirectoryOnlyWzArchive(IReadOnlyList<string> dirNames, ushort version = 779) {
+        const uint fstart = 0x3C;
+        uint vh = 0;
+        foreach (char ch in version.ToString(System.Globalization.CultureInfo.InvariantCulture)) {
+            vh = vh * 32 + ch + 1;
+        }
+        ushort encVer = (ushort) (0xFFu ^ ((vh >> 24) & 0xFFu) ^ ((vh >> 16) & 0xFFu) ^ ((vh >> 8) & 0xFFu) ^ (vh & 0xFFu));
+
+        using var ms = new MemoryStream();
+        using var bw = new BinaryWriter(ms);
+
+        // 60-byte PKG1 header
+        bw.Write("PKG1"u8);
+        bw.Write(0UL); // placeholder fsize
+        bw.Write(fstart);
+        byte[] copyright = System.Text.Encoding.UTF8.GetBytes("Package file v1.0 Copyright 2002 Wizet, ZMS");
+        bw.Write(copyright);
+        bw.Write((byte) 0);
+
+        // At fstart (0x3C): encVer + entry count
+        bw.Write(encVer);
+        bw.Write((sbyte) dirNames.Count);
+
+        var offsetPositions = new int[dirNames.Count];
+        foreach ((int idx, string name) in dirNames.Index()) {
+            bw.Write((byte) 3); // WzNodeKind.Directory
+            bw.Write((sbyte) (-name.Length));
+            for (int k = 0; k < name.Length; k++) {
+                bw.Write((byte) (name[k] ^ unchecked((byte) (0xAA + k))));
+            }
+            bw.Write((sbyte) 0); // size = 0
+            bw.Write((sbyte) 0); // checksum = 0
+            offsetPositions[idx] = (int) ms.Position;
+            bw.Write(0u); // placeholder offset
+        }
+
+        // Write empty child directory table (count = 0) for each directory entry
+        var targetPositions = new uint[dirNames.Count];
+        for (int i = 0; i < dirNames.Count; i++) {
+            targetPositions[i] = (uint) ms.Position;
+            bw.Write((sbyte) 0);
+        }
+
+        byte[] bytes = ms.ToArray();
+        Span<byte> span = bytes;
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(span.Slice(4, 8), (ulong) (bytes.Length - (int) fstart));
+
+        for (int i = 0; i < dirNames.Count; i++) {
+            uint fieldPos = (uint) offsetPositions[i];
+            uint real = targetPositions[i];
+            uint o = unchecked(fieldPos - fstart) ^ uint.MaxValue;
+            o = unchecked(o * vh);
+            o = unchecked(o - 0x581C3F6Du);
+            o = System.Numerics.BitOperations.RotateLeft(o, (int) (o & 0x1Fu));
+            uint encrypted = o ^ unchecked(real - unchecked(fstart * 2u));
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(span.Slice(offsetPositions[i], 4), encrypted);
+        }
+
+        return bytes;
+    }
 }

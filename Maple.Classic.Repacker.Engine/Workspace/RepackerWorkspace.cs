@@ -121,7 +121,7 @@ public sealed class RepackerWorkspace : IDisposable {
             if (existing is not null) {
                 int idx = archives.IndexOf(existing);
                 existing.Dispose();
-                var replacement = new ArchiveSession(existing.ArchiveId, fileName, fullPath, wz);
+                var replacement = new ArchiveSession(existing.ArchiveId, fileName, fullPath, wz, version);
                 archives[idx] = replacement;
                 SelectedArchiveId = replacement.ArchiveId;
                 SelectedNodePath = string.Empty;
@@ -131,7 +131,7 @@ public sealed class RepackerWorkspace : IDisposable {
             }
 
             string id = $"wz_{nextArchiveSeq++}";
-            var session = new ArchiveSession(id, fileName, fullPath, wz);
+            var session = new ArchiveSession(id, fileName, fullPath, wz, version);
             archives.Add(session);
             SelectedArchiveId = id;
             SelectedNodePath = string.Empty;
@@ -152,7 +152,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
         lock (syncLock) {
             string id = $"wz_{nextArchiveSeq++}";
-            var session = new ArchiveSession(id, cleanName, filePath ?? string.Empty, wz);
+            var session = new ArchiveSession(id, cleanName, filePath ?? string.Empty, wz, version);
             archives.Add(session);
             SelectedArchiveId = id;
             SelectedNodePath = string.Empty;
@@ -170,20 +170,28 @@ public sealed class RepackerWorkspace : IDisposable {
         }
 
         string[] wzFiles = Directory.GetFiles(fullDir, "*.wz", SearchOption.AllDirectories)
-            .OrderBy(p => p, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(static p => p.Count(static c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar))
+            .ThenBy(static p => {
+                string stem = Path.GetFileNameWithoutExtension(p);
+                return string.Equals(stem, "Base", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            })
+            .ThenBy(static p => {
+                string stem = Path.GetFileNameWithoutExtension(p);
+                string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
+                return string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+            })
+            .ThenBy(static p => p, StringComparer.OrdinalIgnoreCase)
             .ToArray();
 
         var opened = new List<ArchiveSummaryDto>();
         foreach (string wzPath in wzFiles) {
             try {
-                var fileInfo = new FileInfo(wzPath);
-                // Skip 63-byte empty stub archives if there is a sibling _000.wz archive
-                if (fileInfo.Length <= 64 && !wzPath.EndsWith("_000.wz", StringComparison.OrdinalIgnoreCase)) {
-                    string dir = fileInfo.DirectoryName ?? fullDir;
-                    string stem = Path.GetFileNameWithoutExtension(wzPath);
-                    if (System.IO.File.Exists(Path.Combine(dir, $"{stem}_000.wz"))) {
-                        continue;
-                    }
+                bool alreadyLinked;
+                lock (syncLock) {
+                    alreadyLinked = archives.Any(a => a.HasLinkedOrSubdirectoryFile(wzPath));
+                }
+                if (alreadyLinked) {
+                    continue;
                 }
                 opened.Add(OpenArchiveFromFile(wzPath, version));
             } catch (Exception ex) {
@@ -356,6 +364,10 @@ public sealed class RepackerWorkspace : IDisposable {
                     return [];
                 }
 
+                if (session.EnsureDirectoryLinkedWithChildren(dirNode)) {
+                    NotifyStateChanged();
+                }
+
                 var result = new List<TreeNodeDto>(dirNode.Children.Count);
                 foreach (VirtualFsNode child in dirNode.Children) {
                     string childPath = string.IsNullOrEmpty(norm) ? child.Name : $"{norm}/{child.Name}";
@@ -450,6 +462,10 @@ public sealed class RepackerWorkspace : IDisposable {
                 VirtualFsNode? dirNode = session.ResolveVirtualNode(norm);
                 if (dirNode is null) {
                     return ErrorInspection(archiveId, norm, $"Node \"{norm}\" not found in \"{session.Name}\".");
+                }
+
+                if (session.EnsureDirectoryLinkedWithChildren(dirNode)) {
+                    NotifyStateChanged();
                 }
 
                 bool isRoot = string.IsNullOrEmpty(norm);
@@ -1436,6 +1452,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     }
 
                     void WalkDir(VirtualFsNode d, string prefix) {
+                        session.EnsureDirectoryLinked(d);
                         foreach (VirtualFsNode c in d.Children) {
                             string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
                             if (c.IsDir) {
@@ -1693,6 +1710,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     }
 
                     void WalkDirs(VirtualFsNode d, string prefix) {
+                        session.EnsureDirectoryLinked(d);
                         foreach (VirtualFsNode c in d.Children) {
                             string full = string.IsNullOrEmpty(prefix) ? c.Name : $"{prefix}/{c.Name}";
                             if (c.IsDir) {
@@ -1784,17 +1802,46 @@ public sealed class RepackerWorkspace : IDisposable {
             return (null, null);
         }
 
-        string leafImgName = Path.GetFileName(targetImgPart);
+        // Build candidate .img paths by progressively stripping leading directory segments
+        // (e.g., "Character/Coat/_Canvas/01040000.img" -> "Character/Coat/_Canvas/01040000.img",
+        // "Coat/_Canvas/01040000.img", "_Canvas/01040000.img", "01040000.img")
+        // as well as "_Canvas" variants when "_Canvas" is not already present.
+        var candidateImgPaths = new List<string>(8);
+        void AddCandidate(string p) {
+            if (!string.IsNullOrEmpty(p) && !candidateImgPaths.Contains(p, StringComparer.OrdinalIgnoreCase)) {
+                candidateImgPaths.Add(p);
+            }
+        }
 
-        // Search across all open ArchiveSessions
-        foreach (ArchiveSession candidate in archives) {
-            // Try full path first, then leaf .img name
-            foreach (string tryImgPath in (ReadOnlySpan<string>) [targetImgPart, leafImgName]) {
+        string[] segments = targetImgPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < segments.Length; i++) {
+            string sub = string.Join('/', segments[i..]);
+            AddCandidate(sub);
+            if (i < segments.Length - 1 && !string.Equals(segments[^2], "_Canvas", StringComparison.OrdinalIgnoreCase)) {
+                string withCanvas = string.Join('/', [.. segments[i..^1], "_Canvas", segments[^1]]);
+                AddCandidate(withCanvas);
+            }
+        }
+        if (segments.Length >= 1) {
+            AddCandidate($"_Canvas/{segments[^1]}");
+        }
+
+        // Check currentSession first, then all other open ArchiveSessions
+        var orderedSessions = new List<ArchiveSession>(archives.Count) { currentSession };
+        foreach (ArchiveSession s in archives) {
+            if (!ReferenceEquals(s, currentSession)) {
+                orderedSessions.Add(s);
+            }
+        }
+
+        foreach (ArchiveSession candidate in orderedSessions) {
+            foreach (string tryImgPath in candidateImgPaths) {
                 VirtualFsNode? vNode = candidate.ResolveVirtualNode(tryImgPath);
                 if (vNode is { IsImage: true }) {
                     try {
                         WzValue parsed = candidate.GetOrParseImage(tryImgPath);
-                        if (ResolvePropertyNode(parsed, innerSubPath) is WzValue.Canvas found) {
+                        if (ResolvePropertyNode(parsed, innerSubPath) is WzValue.Canvas found &&
+                            !(found.Width <= 1 && found.Height <= 1 && found["_outlink"] is not null)) {
                             return (found, $"{candidate.Name}:{tryImgPath}/{innerSubPath}");
                         }
                     } catch {
@@ -2245,6 +2292,7 @@ public sealed class RepackerWorkspace : IDisposable {
         StringComparison cmp,
         int maxResults,
         List<SearchResultItemDto> results) {
+        session.EnsureDirectoryLinked(dir);
         foreach (VirtualFsNode child in dir.Children) {
             if (results.Count >= maxResults) return;
             string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
