@@ -1,67 +1,31 @@
-using System.ComponentModel.DataAnnotations;
 using Maple.Classic.Repacker.Engine.Canvas;
 
 namespace Maple.Classic.Repacker.Engine.Models;
 
-/// <summary>Kind of node in the workspace tree. <see cref="DisplayAttribute.ShortName"/> is the UI type badge.</summary>
+/// <summary>Kind of node in the workspace tree.</summary>
 public enum RepackerNodeKind {
-    [Display(ShortName = "WZ")]
     Archive,
-
-    [Display(ShortName = "DIR")]
     Directory,
-
-    [Display(ShortName = "IMG")]
     Image,
-
     Property,
 }
 
-/// <summary>WZ property value type. <see cref="DisplayAttribute.ShortName"/> is the UI type badge.</summary>
+/// <summary>WZ property value type.</summary>
 public enum RepackerPropertyKind {
-    [Display(ShortName = "UNK")]
     None,
-
-    [Display(ShortName = "NULL")]
     Null,
-
-    [Display(ShortName = "I16")]
     Short,
-
-    [Display(ShortName = "I32")]
     Int,
-
-    [Display(ShortName = "I64")]
     Long,
-
-    [Display(ShortName = "F32")]
     Float,
-
-    [Display(ShortName = "F64")]
     Double,
-
-    [Display(ShortName = "STR")]
     String,
-
-    [Display(ShortName = "VEC")]
     Vector,
-
-    [Display(ShortName = "UOL")]
     Uol,
-
-    [Display(ShortName = "SUB")]
     Object,
-
-    [Display(ShortName = "PNG")]
     Canvas,
-
-    [Display(ShortName = "SND")]
     Sound,
-
-    [Display(ShortName = "CVX")]
     Convex,
-
-    [Display(ShortName = "RAW")]
     RawData,
 }
 
@@ -136,6 +100,10 @@ public sealed record ArchiveSummaryDto(
     RepackerChangeState ChangeState = RepackerChangeState.Unchanged,
     string[]? LinkedFilePaths = null);
 
+/// <summary>
+/// One row of the lazily-loaded tree. <see cref="ChildCount"/> is 0 for an <c>.img</c> until it is parsed, so the UI
+/// treats images (and directories, whose split archives link on expand) as expandable regardless of the count.
+/// </summary>
 public sealed record TreeNodeDto(
     string ArchiveId,
     string Path,
@@ -143,8 +111,6 @@ public sealed record TreeNodeDto(
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
     string DisplayValue,
-    string TypeBadge,
-    bool HasChildren,
     int ChildCount,
     RepackerChangeState ChangeState = RepackerChangeState.Unchanged,
     int SizeBytes = 0);
@@ -154,7 +120,6 @@ public sealed record SubPropertyRowDto(
     string Path,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
-    string TypeBadge,
     string DisplayValue,
     int ChildCount,
     int SizeBytes = 0,
@@ -218,7 +183,6 @@ public sealed record NodeInspectionDto(
     string? ImagePath,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
-    string TypeBadge,
     string DisplayValue,
     string? RawStringValue,
     long? NumericIntValue,
@@ -254,7 +218,6 @@ public sealed record SearchResultItemDto(
     string Name,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
-    string TypeBadge,
     string DisplayValue);
 
 public sealed record ClipboardStateDto(

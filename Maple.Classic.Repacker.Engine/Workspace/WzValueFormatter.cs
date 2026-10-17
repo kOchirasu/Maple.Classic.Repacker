@@ -6,11 +6,11 @@ using Maple.Classic.Repacker.Engine.Models;
 namespace Maple.Classic.Repacker.Engine.Workspace;
 
 /// <summary>
-/// Formatting helpers that describe <see cref="WzValue"/> nodes for the UI (type badges, display values, byte sizes, hex slices).
+/// Formatting helpers that describe <see cref="WzValue"/> nodes for the UI (kinds, display values, byte sizes, hex slices).
 /// </summary>
 public static class WzValueFormatter {
-    public static (RepackerPropertyKind Kind, string Badge, string DisplayValue) DescribeWzValue(WzValue v) {
-        (RepackerPropertyKind kind, string display) = v switch {
+    public static (RepackerPropertyKind Kind, string DisplayValue) DescribeWzValue(WzValue v) {
+        return v switch {
             WzValue.Null => (RepackerPropertyKind.Null, "null"),
             WzValue.Short(var x) => (RepackerPropertyKind.Short, x.ToString(CultureInfo.InvariantCulture)),
             WzValue.Int(var x) => (RepackerPropertyKind.Int, x.ToString(CultureInfo.InvariantCulture)),
@@ -27,7 +27,6 @@ public static class WzValueFormatter {
             WzValue.RawData(var len) => (RepackerPropertyKind.RawData, FormatByteSize(len)),
             _ => (RepackerPropertyKind.None, string.Empty),
         };
-        return (kind, kind.GetShortName(), display);
     }
 
     internal static WzValue CreatePrimitiveOrStructuredValue(

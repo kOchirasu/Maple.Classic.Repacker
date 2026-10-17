@@ -29,6 +29,55 @@ namespace MapleRepacker {
         RawData = 'RawData',
     }
 
+    const NODE_KIND_BADGES: Record<Exclude<RepackerNodeKind, RepackerNodeKind.Property>, string> = {
+        [RepackerNodeKind.Archive]: 'WZ',
+        [RepackerNodeKind.Directory]: 'DIR',
+        [RepackerNodeKind.Image]: 'IMG',
+    };
+
+    const PROPERTY_KIND_BADGES: Record<RepackerPropertyKind, string> = {
+        [RepackerPropertyKind.None]: 'UNK',
+        [RepackerPropertyKind.Null]: 'NULL',
+        [RepackerPropertyKind.Short]: 'I16',
+        [RepackerPropertyKind.Int]: 'I32',
+        [RepackerPropertyKind.Long]: 'I64',
+        [RepackerPropertyKind.Float]: 'F32',
+        [RepackerPropertyKind.Double]: 'F64',
+        [RepackerPropertyKind.String]: 'STR',
+        [RepackerPropertyKind.Vector]: 'VEC',
+        [RepackerPropertyKind.Uol]: 'UOL',
+        [RepackerPropertyKind.Object]: 'SUB',
+        [RepackerPropertyKind.Canvas]: 'PNG',
+        [RepackerPropertyKind.Sound]: 'SND',
+        [RepackerPropertyKind.Convex]: 'CVX',
+        [RepackerPropertyKind.RawData]: 'RAW',
+    };
+
+    /**
+     * Short type label shown in tree rows, child tables, search hits and the inspector: the node kind for archives,
+     * directories and images (WZ/DIR/IMG), otherwise the property's value type (I32, STR, PNG, ...).
+     * Also used as the `badge-*` CSS class.
+     */
+    export function typeBadge(nodeKind: RepackerNodeKind, propertyKind: RepackerPropertyKind = RepackerPropertyKind.None): string {
+        return nodeKind === RepackerNodeKind.Property ? PROPERTY_KIND_BADGES[propertyKind] ?? 'UNK' : NODE_KIND_BADGES[nodeKind];
+    }
+
+    /**
+     * Whether a tree node shows an expand arrow: anything with children, plus every .img (its child count is 0 until the
+     * image is parsed on first expand).
+     */
+    export function hasTreeChildren(node: TreeNodeDto): boolean {
+        return node.nodeKind === RepackerNodeKind.Image || node.childCount > 0;
+    }
+
+    /**
+     * Whether clicking a tree node toggles it open. Directories always can, even when they look empty: their split
+     * .wz archives are linked from disk when first expanded.
+     */
+    export function canExpandTreeNode(node: TreeNodeDto): boolean {
+        return hasTreeChildren(node) || node.nodeKind === RepackerNodeKind.Directory;
+    }
+
     export enum RepackerChangeState {
         Unchanged = 'Unchanged',
         Added = 'Added',
@@ -271,8 +320,6 @@ namespace MapleRepacker {
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
         displayValue: string;
-        typeBadge: string;
-        hasChildren: boolean;
         childCount: number;
         sizeBytes: number;
         changeState: RepackerChangeState;
@@ -283,7 +330,6 @@ namespace MapleRepacker {
         path: string;
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
-        typeBadge: string;
         displayValue: string;
         childCount: number;
         sizeBytes: number;
@@ -354,7 +400,6 @@ namespace MapleRepacker {
         imagePath?: string | null;
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
-        typeBadge: string;
         displayValue: string;
         rawStringValue?: string | null;
         numericIntValue?: number | null;
@@ -381,7 +426,6 @@ namespace MapleRepacker {
         name: string;
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
-        typeBadge: string;
         displayValue: string;
     }
 

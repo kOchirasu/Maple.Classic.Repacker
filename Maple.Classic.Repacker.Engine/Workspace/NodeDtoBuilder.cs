@@ -16,7 +16,6 @@ internal readonly record struct NodeChild(
     string Name,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
-    string TypeBadge,
     string DisplayValue,
     int ChildCount,
     int SizeBytes,
@@ -45,7 +44,6 @@ internal static class NodeDtoBuilder {
                     child.Name,
                     RepackerNodeKind.Directory,
                     RepackerPropertyKind.None,
-                    RepackerNodeKind.Directory.GetShortName(),
                     DisplayValue: string.Empty,
                     child.Children.Count,
                     SizeBytes: 0,
@@ -59,7 +57,6 @@ internal static class NodeDtoBuilder {
                     child.Name,
                     RepackerNodeKind.Image,
                     RepackerPropertyKind.Object,
-                    RepackerNodeKind.Image.GetShortName(),
                     FormatByteSize(size),
                     ChildCount: 0,
                     size,
@@ -96,14 +93,13 @@ internal static class NodeDtoBuilder {
     }
 
     private static NodeChild DescribeProperty(ArchiveSession session, string imgPath, string propSubPath, string name, WzValue value, bool deleted) {
-        (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(value);
+        (RepackerPropertyKind kind, string display) = DescribeWzValue(value);
         int childCount = GetChildCount(value) + session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
         return new NodeChild(
             $"{imgPath}/{propSubPath}",
             name,
             RepackerNodeKind.Property,
             kind,
-            badge,
             display,
             childCount,
             GetPayloadSize(value),
@@ -144,8 +140,6 @@ internal static class NodeDtoBuilder {
             c.NodeKind,
             c.PropertyKind,
             c.NodeKind == RepackerNodeKind.Directory ? $"{c.DirectoryCount + c.ImageCount} items" : c.DisplayValue,
-            c.TypeBadge,
-            HasChildren: c.NodeKind == RepackerNodeKind.Image || c.ChildCount > 0,
             c.ChildCount,
             c.ChangeState,
             c.SizeBytes);
@@ -156,7 +150,6 @@ internal static class NodeDtoBuilder {
             c.Path,
             c.NodeKind,
             c.PropertyKind,
-            c.TypeBadge,
             c.NodeKind == RepackerNodeKind.Directory ? $"{c.DirectoryCount} dirs, {c.ImageCount} images" : c.DisplayValue,
             c.ChildCount,
             c.SizeBytes,
@@ -205,7 +198,6 @@ internal static class NodeDtoBuilder {
             null,
             RepackerNodeKind.Property,
             RepackerPropertyKind.None,
-            "ERR",
             string.Empty,
             null,
             null,

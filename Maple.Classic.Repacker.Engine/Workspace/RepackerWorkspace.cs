@@ -497,7 +497,6 @@ public sealed class RepackerWorkspace : IDisposable {
                 bool isRoot = string.IsNullOrEmpty(norm);
                 bool isDirDeleted = !isRoot && session.IsVirtualPathDeleted(norm);
                 RepackerNodeKind nodeKind = isRoot ? RepackerNodeKind.Archive : RepackerNodeKind.Directory;
-                string badge = nodeKind.GetShortName();
                 string displayName = isRoot ? session.Name : dirNode.Name;
                 (int dCount, int iCount) = ArchiveSession.CountVirtualRecursive(dirNode);
 
@@ -537,7 +536,6 @@ public sealed class RepackerWorkspace : IDisposable {
                     null,
                     nodeKind,
                     RepackerPropertyKind.None,
-                    badge,
                     $"{dCount} directories, {iCount} images",
                     null,
                     null,
@@ -575,10 +573,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     : subPath.Contains('/') ? subPath[(subPath.LastIndexOf('/') + 1)..] : subPath;
 
                 RepackerNodeKind nodeKind = isImageRoot ? RepackerNodeKind.Image : RepackerNodeKind.Property;
-                (RepackerPropertyKind propKind, string typeBadge, string displayValue) = DescribeWzValue(target);
-                if (isImageRoot) {
-                    typeBadge = RepackerNodeKind.Image.GetShortName();
-                }
+                (RepackerPropertyKind propKind, string displayValue) = DescribeWzValue(target);
 
                 string? rawStr = target.AsString();
                 long? numInt = target is WzValue.Short or WzValue.Int or WzValue.Long ? target.AsLong() : null;
@@ -718,7 +713,6 @@ public sealed class RepackerWorkspace : IDisposable {
                     imgPath,
                     nodeKind,
                     propKind,
-                    typeBadge,
                     displayValue,
                     rawStr,
                     numInt,

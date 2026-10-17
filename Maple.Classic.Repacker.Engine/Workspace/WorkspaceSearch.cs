@@ -34,7 +34,6 @@ internal static class WorkspaceSearch {
                         child.Name,
                         RepackerNodeKind.Directory,
                         RepackerPropertyKind.None,
-                        RepackerNodeKind.Directory.GetShortName(),
                         $"{child.Children.Count} items"));
                 }
                 SearchDirectory(session, child, fullPath, nameFilter, valFilter, kindFilter, exact, cmp, maxResults, results);
@@ -47,7 +46,6 @@ internal static class WorkspaceSearch {
                         child.Name,
                         RepackerNodeKind.Image,
                         RepackerPropertyKind.Object,
-                        RepackerNodeKind.Image.GetShortName(),
                         FormatByteSize(session.GetImageSize(fullPath))));
                 }
 
@@ -80,7 +78,7 @@ internal static class WorkspaceSearch {
             if (results.Count >= maxResults) return;
             string propSubPath = string.IsNullOrEmpty(subPath) ? prop.Name : $"{subPath}/{prop.Name}";
             string fullPath = $"{imgPath}/{propSubPath}";
-            (RepackerPropertyKind pKind, string badge, string disp) = DescribeWzValue(prop.Value);
+            (RepackerPropertyKind pKind, string disp) = DescribeWzValue(prop.Value);
 
             bool kindMatches = !kindFilter.HasValue || kindFilter.Value == RepackerPropertyKind.None || kindFilter.Value == pKind;
             if (kindMatches) {
@@ -102,7 +100,6 @@ internal static class WorkspaceSearch {
                         prop.Name,
                         RepackerNodeKind.Property,
                         pKind,
-                        badge,
                         disp));
                 }
             }

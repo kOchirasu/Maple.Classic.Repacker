@@ -1,8 +1,52 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.Text;
+using Maple.Classic.Repacker.Engine.IO;
 
 namespace Maple.Classic.Repacker.Engine.Canvas;
+
+/// <summary>Chunk types, as their 4 ASCII bytes read as a big-endian <see cref="uint"/> (e.g. "IHDR").</summary>
+internal enum PngChunkType : uint {
+    Ihdr = 0x49484452, // "IHDR" image header
+    Plte = 0x504C5445, // "PLTE" palette
+    Trns = 0x74524E53, // "tRNS" transparency
+    Idat = 0x49444154, // "IDAT" image data
+    Iend = 0x49454E44, // "IEND" end of image
+}
+
+/// <summary>IHDR colour type: which channels each pixel has.</summary>
+internal enum PngColorType : byte {
+    Grayscale = 0,
+    Truecolor = 2,
+    Indexed = 3,
+    GrayscaleAlpha = 4,
+    TruecolorAlpha = 6,
+}
+
+/// <summary>Per-scanline filter applied before compression.</summary>
+internal enum PngFilterType : byte {
+    None = 0,
+    Sub = 1,
+    Up = 2,
+    Average = 3,
+    Paeth = 4,
+}
+
+/// <summary>IHDR compression method; PNG defines only deflate.</summary>
+internal enum PngCompressionMethod : byte {
+    Deflate = 0,
+}
+
+/// <summary>IHDR filter method; PNG defines only adaptive (per-scanline <see cref="PngFilterType"/>).</summary>
+internal enum PngFilterMethod : byte {
+    Adaptive = 0,
+}
+
+/// <summary>IHDR interlace method.</summary>
+internal enum PngInterlaceMethod : byte {
+    None = 0,
+    Adam7 = 1,
+}
 
 /// <summary>
 /// Zero-dependency cross-platform PNG encoder and decoder operating on 32-bit RGBA8888 pixel buffers.
@@ -23,6 +67,8 @@ public static class PngCodec {
         }
         return table;
     }
+
+    private const byte BitDepth8 = 8;
 
     private static uint ComputeCrc(ReadOnlySpan<byte> type, ReadOnlySpan<byte> data) {
         uint c = 0xFFFFFFFFu;
@@ -48,14 +94,16 @@ public static class PngCodec {
 
         // 1. IHDR chunk
         Span<byte> ihdr = stackalloc byte[13];
-        BinaryPrimitives.WriteUInt32BigEndian(ihdr[..4], (uint) width);
-        BinaryPrimitives.WriteUInt32BigEndian(ihdr.Slice(4, 4), (uint) height);
-        ihdr[8] = 8;  // Bit depth = 8
-        ihdr[9] = 6;  // Color type = 6 (Truecolor with alpha RGBA)
-        ihdr[10] = 0; // Compression = Deflate
-        ihdr[11] = 0; // Filter = Adaptive
-        ihdr[12] = 0; // Interlace = None
-        WriteChunk(ms, "IHDR"u8, ihdr);
+        var w = new SpanWriter(ihdr);
+        w.WriteUInt32BigEndian((uint) width);
+        w.WriteUInt32BigEndian((uint) height);
+        w.WriteByte(BitDepth8);
+        w.WriteByte((byte) PngColorType.TruecolorAlpha);
+        w.WriteByte((byte) PngCompressionMethod.Deflate);
+        w.WriteByte((byte) PngFilterMethod.Adaptive);
+        w.WriteByte((byte) PngInterlaceMethod.None);
+        w.EnsureFilled();
+        WriteChunk(ms, PngChunkType.Ihdr, ihdr);
 
         // 2. IDAT chunk (filtered scanlines compressed with ZLibStream)
         int stride = width * 4;
@@ -63,8 +111,8 @@ public static class PngCodec {
         for (int y = 0; y < height; y++) {
             int srcRow = y * stride;
             int dstRow = y * (stride + 1);
-            // Filter 1 (Sub) gives strong compression on pixel art sprites while remaining fast
-            rawScanlines[dstRow] = 1;
+            // Sub filtering gives strong compression on pixel art sprites while remaining fast
+            rawScanlines[dstRow] = (byte) PngFilterType.Sub;
             for (int x = 0; x < stride; x++) {
                 byte cur = rgba[srcRow + x];
                 byte left = x >= 4 ? rgba[srcRow + x - 4] : (byte) 0;
@@ -79,10 +127,10 @@ public static class PngCodec {
             }
             compressedIdat = idatMs.ToArray();
         }
-        WriteChunk(ms, "IDAT"u8, compressedIdat);
+        WriteChunk(ms, PngChunkType.Idat, compressedIdat);
 
         // 3. IEND chunk
-        WriteChunk(ms, "IEND"u8, []);
+        WriteChunk(ms, PngChunkType.Iend, []);
         return ms.ToArray();
     }
 
@@ -95,15 +143,15 @@ public static class PngCodec {
         int width = 0;
         int height = 0;
         byte bitDepth = 0;
-        byte colorType = 0;
-        byte interlace = 0;
+        var colorType = PngColorType.Grayscale;
+        var interlace = PngInterlaceMethod.None;
         byte[]? palette = null;
         byte[]? trns = null;
         using var idatBuffer = new MemoryStream();
 
         while (pos + 8 <= pngBytes.Length) {
             int chunkLen = (int) BinaryPrimitives.ReadUInt32BigEndian(pngBytes.Slice(pos, 4));
-            ReadOnlySpan<byte> chunkType = pngBytes.Slice(pos + 4, 4);
+            var chunkType = (PngChunkType) BinaryPrimitives.ReadUInt32BigEndian(pngBytes.Slice(pos + 4, 4));
             pos += 8;
             if (chunkLen < 0 || pos + chunkLen + 4 > pngBytes.Length) {
                 break;
@@ -111,22 +159,28 @@ public static class PngCodec {
             ReadOnlySpan<byte> chunkData = pngBytes.Slice(pos, chunkLen);
             pos += chunkLen + 4; // skip data + CRC
 
-            if (chunkType.SequenceEqual("IHDR"u8)) {
-                if (chunkLen < 13) {
-                    throw new InvalidDataException("Malformed PNG IHDR chunk.");
-                }
-                width = (int) BinaryPrimitives.ReadUInt32BigEndian(chunkData[..4]);
-                height = (int) BinaryPrimitives.ReadUInt32BigEndian(chunkData.Slice(4, 4));
-                bitDepth = chunkData[8];
-                colorType = chunkData[9];
-                interlace = chunkData[12];
-            } else if (chunkType.SequenceEqual("PLTE"u8)) {
-                palette = chunkData.ToArray();
-            } else if (chunkType.SequenceEqual("tRNS"u8)) {
-                trns = chunkData.ToArray();
-            } else if (chunkType.SequenceEqual("IDAT"u8)) {
-                idatBuffer.Write(chunkData);
-            } else if (chunkType.SequenceEqual("IEND"u8)) {
+            switch (chunkType) {
+                case PngChunkType.Ihdr:
+                    if (chunkLen < 13) {
+                        throw new InvalidDataException("Malformed PNG IHDR chunk.");
+                    }
+                    width = (int) BinaryPrimitives.ReadUInt32BigEndian(chunkData[..4]);
+                    height = (int) BinaryPrimitives.ReadUInt32BigEndian(chunkData.Slice(4, 4));
+                    bitDepth = chunkData[8];
+                    colorType = (PngColorType) chunkData[9];
+                    interlace = (PngInterlaceMethod) chunkData[12];
+                    break;
+                case PngChunkType.Plte:
+                    palette = chunkData.ToArray();
+                    break;
+                case PngChunkType.Trns:
+                    trns = chunkData.ToArray();
+                    break;
+                case PngChunkType.Idat:
+                    idatBuffer.Write(chunkData);
+                    break;
+            }
+            if (chunkType == PngChunkType.Iend) {
                 break;
             }
         }
@@ -134,20 +188,19 @@ public static class PngCodec {
         if (width <= 0 || height <= 0) {
             throw new InvalidDataException("PNG IHDR missing or invalid dimensions.");
         }
-        if (interlace != 0) {
+        if (interlace != PngInterlaceMethod.None) {
             throw new InvalidDataException("Interlaced PNG images are not supported; please save as non-interlaced PNG.");
         }
-        if (bitDepth != 8) {
+        if (bitDepth != BitDepth8) {
             throw new InvalidDataException($"Unsupported PNG bit depth {bitDepth} (only 8-bit per channel PNGs are supported).");
         }
 
         int bpp = colorType switch {
-            0 => 1, // Grayscale
-            2 => 3, // RGB
-            3 => 1, // Indexed Palette
-            4 => 2, // Grayscale + Alpha
-            6 => 4, // RGBA
-            _ => throw new InvalidDataException($"Unsupported PNG color type {colorType}."),
+            PngColorType.Grayscale or PngColorType.Indexed => 1,
+            PngColorType.GrayscaleAlpha => 2,
+            PngColorType.Truecolor => 3,
+            PngColorType.TruecolorAlpha => 4,
+            _ => throw new InvalidDataException($"Unsupported PNG color type {(byte) colorType}."),
         };
 
         int stride = width * bpp;
@@ -169,7 +222,7 @@ public static class PngCodec {
         byte[] unfiltered = new byte[height * stride];
         for (int y = 0; y < height; y++) {
             int srcOffset = y * (stride + 1);
-            byte filterType = decompressed[srcOffset];
+            var filterType = (PngFilterType) decompressed[srcOffset];
             int dstRow = y * stride;
             int prevRow = (y - 1) * stride;
 
@@ -180,12 +233,11 @@ public static class PngCodec {
                 byte c = (x >= bpp && y > 0) ? unfiltered[prevRow + x - bpp] : (byte) 0;
 
                 unfiltered[dstRow + x] = filterType switch {
-                    0 => raw,
-                    1 => unchecked((byte) (raw + a)),
-                    2 => unchecked((byte) (raw + b)),
-                    3 => unchecked((byte) (raw + ((a + b) >> 1))),
-                    4 => unchecked((byte) (raw + PaethPredictor(a, b, c))),
-                    _ => raw,
+                    PngFilterType.Sub => unchecked((byte) (raw + a)),
+                    PngFilterType.Up => unchecked((byte) (raw + b)),
+                    PngFilterType.Average => unchecked((byte) (raw + ((a + b) >> 1))),
+                    PngFilterType.Paeth => unchecked((byte) (raw + PaethPredictor(a, b, c))),
+                    _ => raw, // PngFilterType.None (unknown filters are passed through unchanged)
                 };
             }
         }
@@ -193,11 +245,11 @@ public static class PngCodec {
         byte[] rgba = new byte[width * height * 4];
         int pixelCount = width * height;
         switch (colorType) {
-            case 6: // RGBA
+            case PngColorType.TruecolorAlpha:
                 Buffer.BlockCopy(unfiltered, 0, rgba, 0, rgba.Length);
                 break;
 
-            case 2: // RGB
+            case PngColorType.Truecolor:
                 for (int i = 0; i < pixelCount; i++) {
                     int s = i * 3;
                     int d = i * 4;
@@ -208,7 +260,7 @@ public static class PngCodec {
                 }
                 break;
 
-            case 4: // Grayscale + Alpha
+            case PngColorType.GrayscaleAlpha:
                 for (int i = 0; i < pixelCount; i++) {
                     byte g = unfiltered[i * 2];
                     byte a = unfiltered[i * 2 + 1];
@@ -220,7 +272,7 @@ public static class PngCodec {
                 }
                 break;
 
-            case 0: // Grayscale
+            case PngColorType.Grayscale:
                 for (int i = 0; i < pixelCount; i++) {
                     byte g = unfiltered[i];
                     int d = i * 4;
@@ -231,7 +283,7 @@ public static class PngCodec {
                 }
                 break;
 
-            case 3: // Palette
+            case PngColorType.Indexed:
                 for (int i = 0; i < pixelCount; i++) {
                     int idx = unfiltered[i];
                     int d = i * 4;
@@ -257,17 +309,18 @@ public static class PngCodec {
         return pb <= pc ? b : c;
     }
 
-    private static void WriteChunk(Stream stream, ReadOnlySpan<byte> type, ReadOnlySpan<byte> data) {
-        Span<byte> lenBytes = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32BigEndian(lenBytes, (uint) data.Length);
-        stream.Write(lenBytes);
-        stream.Write(type);
-        if (!data.IsEmpty) {
-            stream.Write(data);
-        }
-        uint crc = ComputeCrc(type, data);
-        Span<byte> crcBytes = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32BigEndian(crcBytes, crc);
-        stream.Write(crcBytes);
+    /// <summary>Writes one chunk: data length, type, data, then the CRC-32 of type + data (all big-endian).</summary>
+    private static void WriteChunk(Stream stream, PngChunkType type, ReadOnlySpan<byte> data) {
+        Span<byte> prefix = stackalloc byte[8];
+        var w = new SpanWriter(prefix);
+        w.WriteUInt32BigEndian((uint) data.Length);
+        w.WriteUInt32BigEndian((uint) type);
+        w.EnsureFilled();
+        stream.Write(prefix);
+        stream.Write(data);
+
+        Span<byte> crc = stackalloc byte[4];
+        BinaryPrimitives.WriteUInt32BigEndian(crc, ComputeCrc(prefix[4..], data));
+        stream.Write(crc);
     }
 }

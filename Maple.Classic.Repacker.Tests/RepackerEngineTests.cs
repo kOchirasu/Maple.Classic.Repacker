@@ -478,13 +478,13 @@ public sealed class RepackerEngineTests {
                 TreeNodeDto[] rootNodes = ws.GetTreeChildren(charSummary.ArchiveId, "");
                 TreeNodeDto coatNode = Assert.Single(rootNodes, n => n.Name == "Coat");
                 TreeNodeDto weaponNode = Assert.Single(rootNodes, n => n.Name == "Weapon");
-                Assert.True(coatNode.HasChildren);
-                Assert.True(weaponNode.HasChildren);
+                Assert.True(coatNode.ChildCount > 0);
+                Assert.True(weaponNode.ChildCount > 0);
 
                 TreeNodeDto[] coatChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat");
                 Assert.Contains(coatChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
                 TreeNodeDto canvasDirNode = Assert.Single(coatChildren, n => n.Name == "_Canvas" && n.NodeKind == RepackerNodeKind.Directory);
-                Assert.True(canvasDirNode.HasChildren);
+                Assert.True(canvasDirNode.ChildCount > 0);
 
                 TreeNodeDto[] canvasChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat/_Canvas");
                 Assert.Contains(canvasChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
@@ -512,11 +512,11 @@ public sealed class RepackerEngineTests {
             using (var ws = new RepackerWorkspace()) {
                 ArchiveSummaryDto baseSummary = ws.OpenArchiveFromFile(baseWzPath);
                 TreeNodeDto[] baseChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "");
-                Assert.Contains(baseChildren, n => n.Name == "Character" && n.HasChildren);
-                Assert.Contains(baseChildren, n => n.Name == "String" && n.HasChildren);
+                Assert.Contains(baseChildren, n => n.Name == "Character" && n.ChildCount > 0);
+                Assert.Contains(baseChildren, n => n.Name == "String" && n.ChildCount > 0);
 
                 TreeNodeDto[] baseCharChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "Character");
-                Assert.Contains(baseCharChildren, n => n.Name == "Coat" && n.HasChildren);
+                Assert.Contains(baseCharChildren, n => n.Name == "Coat" && n.ChildCount > 0);
 
                 NodeInspectionDto eqpInspect = ws.InspectNode(baseSummary.ArchiveId, "String/Eqp.img/Eqp/Coat/1040000/name");
                 Assert.True(eqpInspect.Ok, eqpInspect.Error);
@@ -557,8 +557,8 @@ public sealed class RepackerEngineTests {
                 Assert.Equal((ushort) 779, charSummary.Version);
                 Assert.True(charSummary.ImageCount >= 3);
                 TreeNodeDto[] rootDirs = ws.GetTreeChildren(charSummary.ArchiveId, "");
-                Assert.Contains(rootDirs, n => n.Name == "Coat" && n.HasChildren);
-                Assert.Contains(rootDirs, n => n.Name == "Weapon" && n.HasChildren);
+                Assert.Contains(rootDirs, n => n.Name == "Coat" && n.ChildCount > 0);
+                Assert.Contains(rootDirs, n => n.Name == "Weapon" && n.ChildCount > 0);
             }
 
             // Test F: Opening a shard or child .wz file that is already linked through an open archive is detected as reopening

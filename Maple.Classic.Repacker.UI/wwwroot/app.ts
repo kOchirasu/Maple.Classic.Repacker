@@ -415,7 +415,7 @@ namespace MapleRepacker {
 
                 rootRow.innerHTML = `
                     <span class="tree-twisty">${isRootExpanded ? '&#9662;' : '&#9656;'}</span>
-                    <span class="tree-badge badge-WZ">WZ</span>
+                    <span class="tree-badge badge-${typeBadge(RepackerNodeKind.Archive)}">${typeBadge(RepackerNodeKind.Archive)}</span>
                     <span class="tree-name" title="${this.escapeHtml(ar.name)}">${this.escapeHtml(ar.name)}</span>
                     <span class="tree-val-preview" title="v${ar.version} • ${ar.imageCount} img">v${ar.version} &bull; ${ar.imageCount} img</span>
                     ${rootStatusDot}
@@ -473,8 +473,8 @@ namespace MapleRepacker {
                 row.dataset.archiveId = archiveId;
                 row.dataset.path = node.path;
 
-                const canExpand = node.hasChildren || node.nodeKind === RepackerNodeKind.Directory;
-                const twistyChar = node.hasChildren ? (isExpanded ? '&#9662;' : '&#9656;') : '';
+                const canExpand = canExpandTreeNode(node);
+                const twistyChar = hasTreeChildren(node) ? (isExpanded ? '&#9662;' : '&#9656;') : '';
                 const valPreview = node.displayValue
                     ? `<span class="tree-val-preview" title="${this.escapeHtml(node.displayValue)}">${this.escapeHtml(node.displayValue)}</span>`
                     : '';
@@ -489,7 +489,7 @@ namespace MapleRepacker {
 
                 row.innerHTML = `
                     <span class="tree-twisty">${twistyChar}</span>
-                    <span class="tree-badge badge-${this.escapeHtml(node.typeBadge)}">${this.escapeHtml(node.typeBadge)}</span>
+                    <span class="tree-badge badge-${typeBadge(node.nodeKind, node.propertyKind)}">${typeBadge(node.nodeKind, node.propertyKind)}</span>
                     <span class="tree-name" title="${this.escapeHtml(node.name)}">${this.escapeHtml(node.name)}</span>
                     ${valPreview}
                     ${statusDot}
@@ -582,13 +582,13 @@ namespace MapleRepacker {
         private async toggleOrSelectTreeNode(
             archiveId: string,
             path: string,
-            hasChildren: boolean,
+            canExpand: boolean,
             clickedTwisty = false
         ): Promise<void> {
             const key = this.makeCacheKey(archiveId, path);
             const alreadySelected = this.selectedArchiveId === archiveId && this.selectedPath === path;
 
-            if (hasChildren) {
+            if (canExpand) {
                 if (clickedTwisty || alreadySelected) {
                     if (this.treeState.expandedKeys.has(key)) {
                         this.treeState.expandedKeys.delete(key);
@@ -721,7 +721,7 @@ namespace MapleRepacker {
                         ? '<span class="meta-chip" style="color:var(--accent-warning); border-color:var(--accent-warning-border); background:var(--accent-warning-bg)">MODIFIED</span>'
                         : '';
             metaBadges.innerHTML = `
-                <span class="meta-chip">${this.escapeHtml(dto.typeBadge)}</span>
+                <span class="meta-chip">${typeBadge(dto.nodeKind, dto.propertyKind)}</span>
                 <span class="meta-chip">${formatByteSize(dto.sizeBytes)}</span>
                 ${changeChip}
             `;
@@ -1335,7 +1335,7 @@ namespace MapleRepacker {
 
                 tr.innerHTML = `
                     <td>${this.escapeHtml(c.name)}</td>
-                    <td><span class="tree-badge badge-${this.escapeHtml(c.typeBadge)}">${this.escapeHtml(c.typeBadge)}</span></td>
+                    <td><span class="tree-badge badge-${typeBadge(c.nodeKind, c.propertyKind)}">${typeBadge(c.nodeKind, c.propertyKind)}</span></td>
                     <td>${this.escapeHtml(c.displayValue)}</td>
                     <td style="text-align: right; color: var(--text-muted)">${this.escapeHtml(sizeOrItems)}</td>
                 `;
@@ -1370,7 +1370,7 @@ namespace MapleRepacker {
         }
 
         private renderPropertyInspector(dto: NodeInspectionDto): void {
-            document.getElementById('inspectorTypePill')!.textContent = dto.typeBadge;
+            document.getElementById('inspectorTypePill')!.textContent = typeBadge(dto.nodeKind, dto.propertyKind);
 
             const isArchiveRoot = !dto.path || dto.nodeKind === RepackerNodeKind.Archive;
             const isDeleted = dto.changeState === RepackerChangeState.Deleted;
@@ -2314,7 +2314,7 @@ namespace MapleRepacker {
                     tr.innerHTML = `
                         <td>${this.escapeHtml(h.archiveName)}</td>
                         <td>${this.escapeHtml(h.path)}</td>
-                        <td><span class="tree-badge badge-${this.escapeHtml(h.typeBadge)}">${this.escapeHtml(h.typeBadge)}</span></td>
+                        <td><span class="tree-badge badge-${typeBadge(h.nodeKind, h.propertyKind)}">${typeBadge(h.nodeKind, h.propertyKind)}</span></td>
                         <td>${this.escapeHtml(h.displayValue)}</td>
                     `;
                     tr.addEventListener('click', () => {
