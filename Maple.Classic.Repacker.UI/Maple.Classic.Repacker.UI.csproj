@@ -1,0 +1,120 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+    <PropertyGroup>
+        <TargetFramework>net10.0-windows</TargetFramework>
+        <EnableWindowsTargeting>true</EnableWindowsTargeting>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
+        <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+        <OutputType>WinExe</OutputType>
+        <ApplicationManifest>app.manifest</ApplicationManifest>
+        <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+        <UseWindowsForms>true</UseWindowsForms>
+        <WebView2NeverCopyLoaderDllToOutputDirectory>true</WebView2NeverCopyLoaderDllToOutputDirectory>
+        <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+        <SelfContained>false</SelfContained>
+        <PublishSingleFile>true</PublishSingleFile>
+        <DebugType Condition="$(Configuration.StartsWith('Release'))">none</DebugType>
+        <DebugSymbols Condition="$(Configuration.StartsWith('Release'))">false</DebugSymbols>
+        <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+        <TypeScriptCompileBlocked>true</TypeScriptCompileBlocked>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="MessagePack" Version="3.1.12" />
+        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" GeneratePathProperty="true" />
+        <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
+        <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
+        <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="7.0.1" PrivateAssets="all" GeneratePathProperty="true" />
+    </ItemGroup>
+
+    <Target Name="ConfigureWebView2ForCostura" BeforeTargets="ResolveAssemblyReferences;FodyTarget">
+        <ItemGroup>
+            <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
+            <ReferenceCopyLocalPaths Include="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll" Condition="Exists('$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll')">
+                <DestinationSubDirectory>runtimes\win-x64\native\</DestinationSubDirectory>
+            </ReferenceCopyLocalPaths>
+        </ItemGroup>
+    </Target>
+
+    <Target Name="ResolveNodeExecutable">
+        <PropertyGroup Condition="'$(OS)' == 'Windows_NT'">
+            <_RegMachinePath>$([MSBuild]::GetRegistryValueFromView('HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Environment', 'Path', '', RegistryView.Registry64))</_RegMachinePath>
+            <_RegUserPath>$([MSBuild]::GetRegistryValueFromView('HKEY_CURRENT_USER\Environment', 'Path', '', RegistryView.Registry64))</_RegUserPath>
+        </PropertyGroup>
+        <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
+            <_PathDir Include="$([System.String]::Copy('$(PATH);$(_RegUserPath);$(_RegMachinePath)').Replace('&quot;', '').Split(';', System.StringSplitOptions.RemoveEmptyEntries))" />
+            <_NodeCandidate Include="%(_PathDir.Identity)\node.exe" Condition="Exists('%(_PathDir.Identity)\node.exe')" />
+            <_NodeCandidate Include="$(ProgramW6432)\nodejs\node.exe" Condition="'$(ProgramW6432)' != '' and Exists('$(ProgramW6432)\nodejs\node.exe')" />
+            <_NodeCandidate Include="$(ProgramFiles)\nodejs\node.exe" Condition="'$(ProgramFiles)' != '' and Exists('$(ProgramFiles)\nodejs\node.exe')" />
+            <_NodeCandidate Include="$(LocalAppData)\Programs\nodejs\node.exe" Condition="'$(LocalAppData)' != '' and Exists('$(LocalAppData)\Programs\nodejs\node.exe')" />
+        </ItemGroup>
+        <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
+            <_PathDir Include="$([System.String]::Copy('$(PATH)').Replace('&quot;', '').Split(':', System.StringSplitOptions.RemoveEmptyEntries))" />
+            <_NodeCandidate Include="%(_PathDir.Identity)/node" Condition="Exists('%(_PathDir.Identity)/node')" />
+            <_NodeCandidate Include="/usr/local/bin/node" Condition="Exists('/usr/local/bin/node')" />
+            <_NodeCandidate Include="/opt/homebrew/bin/node" Condition="Exists('/opt/homebrew/bin/node')" />
+            <_NodeCandidate Include="/usr/bin/node" Condition="Exists('/usr/bin/node')" />
+        </ItemGroup>
+        <PropertyGroup>
+            <NodeExe Condition="'$(NodeExe)' == '' and Exists('%(_NodeCandidate.Identity)')">%(_NodeCandidate.Identity)</NodeExe>
+            <NodeExe Condition="'$(NodeExe)' == ''">node</NodeExe>
+            <NodeDir Condition="Exists('$(NodeExe)')">$([System.IO.Path]::GetDirectoryName('$(NodeExe)'))</NodeDir>
+            <NpmCmd Condition="'$(OS)' == 'Windows_NT' and '$(NodeDir)' != '' and Exists('$(NodeDir)\npm.cmd')">set "PATH=$(NodeDir);%PATH%" &amp;&amp; "$(NodeDir)\npm.cmd"</NpmCmd>
+            <NpmCmd Condition="'$(OS)' != 'Windows_NT' and '$(NodeDir)' != '' and Exists('$(NodeDir)/npm')">PATH="$(NodeDir):$PATH" "$(NodeDir)/npm"</NpmCmd>
+            <NpmCmd Condition="'$(NpmCmd)' == ''">npm</NpmCmd>
+        </PropertyGroup>
+    </Target>
+
+    <Target Name="CompileTypeScriptCrossPlatform" DependsOnTargets="ResolveNodeExecutable" BeforeTargets="SplitResourcesByCulture;CoreCompile">
+        <Exec Condition="!Exists('$(MSBuildProjectDirectory)/node_modules/@codemirror/view') or !Exists('$(MSBuildProjectDirectory)/node_modules/@msgpack/msgpack') or ('$(OS)' == 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/win32-x64')) or ('$(OS)' != 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/linux-x64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-arm64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-x64'))" Command="$(NpmCmd) install --no-audit --no-fund" WorkingDirectory="$(MSBuildProjectDirectory)" />
+        <Exec Command="&quot;$(NodeExe)&quot; &quot;$(MSBuildProjectDirectory)/scripts/build-vendor.mjs&quot;" WorkingDirectory="$(MSBuildProjectDirectory)" />
+        <Exec Condition="'$(OS)' != 'Windows_NT' AND '$(TscExe)' != '' AND Exists('$(TscExe)')" Command="chmod +x &quot;$(TscExe)&quot;" />
+        <Exec Condition="'$(TscExe)' != '' AND Exists('$(TscExe)')" Command="&quot;$(TscExe)&quot; -p &quot;$(MSBuildProjectDirectory)/tsconfig.json&quot;" />
+        <Exec Condition="('$(TscExe)' == '' OR !Exists('$(TscExe)')) AND Exists('$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js')" Command="&quot;$(NodeExe)&quot; &quot;$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js&quot; -p &quot;$(MSBuildProjectDirectory)/tsconfig.json&quot;" />
+        <ItemGroup>
+            <EmbeddedResource Include="obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js" LogicalName="wwwroot/vendor/codemirror/cm6.bundle.js" Condition="Exists('obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js')" />
+            <EmbeddedResource Include="obj/ts/wwwroot/vendor/msgpack/msgpack.min.js" LogicalName="wwwroot/vendor/msgpack/msgpack.min.js" Condition="Exists('obj/ts/wwwroot/vendor/msgpack/msgpack.min.js')" />
+            <EmbeddedResource Include="obj/ts/wwwroot/rpc.js" LogicalName="wwwroot/rpc.js" Condition="Exists('obj/ts/wwwroot/rpc.js')" />
+            <EmbeddedResource Include="obj/ts/wwwroot/layout.js" LogicalName="wwwroot/layout.js" Condition="Exists('obj/ts/wwwroot/layout.js')" />
+            <EmbeddedResource Include="obj/ts/wwwroot/app.js" LogicalName="wwwroot/app.js" Condition="Exists('obj/ts/wwwroot/app.js')" />
+        </ItemGroup>
+        <Copy SourceFiles="obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js" DestinationFolder="$(OutputPath)wwwroot/vendor/codemirror" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js')" />
+        <Copy SourceFiles="obj/ts/wwwroot/vendor/msgpack/msgpack.min.js" DestinationFolder="$(OutputPath)wwwroot/vendor/msgpack" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/vendor/msgpack/msgpack.min.js')" />
+        <Copy SourceFiles="obj/ts/wwwroot/rpc.js;obj/ts/wwwroot/layout.js;obj/ts/wwwroot/app.js" DestinationFolder="$(OutputPath)wwwroot" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/app.js')" />
+    </Target>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Maple.Classic.Repacker.Engine\Maple.Classic.Repacker.Engine.csproj" />
+        <ProjectReference Include="..\Maple.Classic.File\Maple.Classic.File.IO\Maple.Classic.File.IO.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <Content Remove="electron\**" />
+        <None Remove="electron\**" />
+        <Content Remove="node_modules\**" />
+        <None Remove="node_modules\**" />
+        <Content Remove="scripts\**" />
+        <None Remove="scripts\**" />
+        <Content Remove="package.json;package-lock.json;tsconfig.json" />
+        <None Include="package.json;tsconfig.json" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+        <Content Remove="wwwroot\**\*.ts" />
+        <None Include="wwwroot\**\*.ts" CopyToOutputDirectory="Never" CopyToPublishDirectory="Never" />
+        <UpToDateCheckInput Include="wwwroot\**\*;scripts\**\*;package.json;tsconfig.json" />
+        <UpToDateCheckBuilt Include="$(OutputPath)wwwroot\app.js" Original="wwwroot\app.ts" />
+        <Content Update="wwwroot\**" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="Never" />
+        <EmbeddedResource Include="wwwroot\**" Exclude="wwwroot\**\*.ts" LogicalName="wwwroot/$([System.String]::Copy('%(RecursiveDir)').Replace('\', '/'))%(Filename)%(Extension)" />
+    </ItemGroup>
+
+    <Target Name="StripPublishWebAssets" AfterTargets="ComputeResolvedFilesToPublishList">
+        <ItemGroup>
+            <ResolvedFileToPublish Remove="@(ResolvedFileToPublish)" Condition="$([System.String]::Copy('%(RelativePath)').StartsWith('wwwroot')) or $([System.String]::Copy('%(RelativePath)').EndsWith('.staticwebassets.endpoints.json'))" />
+        </ItemGroup>
+    </Target>
+
+    <Target Name="CleanPublishEndpointsJson" AfterTargets="Publish">
+        <Delete Files="$(PublishDir)$(AssemblyName).staticwebassets.endpoints.json" />
+    </Target>
+
+</Project>

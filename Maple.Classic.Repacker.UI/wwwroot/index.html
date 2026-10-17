@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Maple.Classic.Repacker // WZ &amp; IMG Studio</title>
+    <link rel="stylesheet" href="index.css" />
+</head>
+<body>
+    <div class="app-shell">
+        <!-- Top Menu & Command Header -->
+        <header class="top-header">
+            <div class="brand-cluster">
+                <div class="brand-logo" title="Maple.Classic.Repacker">WZ</div>
+                <div class="brand-titles">
+                    <span class="brand-name">Maple.Classic.Repacker</span>
+                    <span class="brand-subtitle">HaRepacker Studio &bull; Classic World</span>
+                </div>
+            </div>
+
+            <nav class="menubar" id="mainMenuBar">
+                <div class="menu-item" data-menu="file">
+                    <button type="button" class="menu-trigger">File</button>
+                    <div class="menu-dropdown">
+                        <button type="button" data-action="openFileModal">Open .wz File or Upload... <kbd>Ctrl+O</kbd></button>
+                        <button type="button" data-action="openDirModal">Open Data Directory...</button>
+                        <button type="button" data-action="newArchiveModal">New Empty .wz Archive...</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="loadSampleWorkspace">Reload Classic Sample Workspace</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="saveArchiveDisk">Save Active .wz to Disk... <kbd>Ctrl+Shift+S</kbd></button>
+                        <button type="button" data-action="downloadArchive">Download Repacked .wz</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="closeActiveArchive">Close Active Archive</button>
+                    </div>
+                </div>
+
+                <div class="menu-item" data-menu="edit">
+                    <button type="button" class="menu-trigger">Edit</button>
+                    <div class="menu-dropdown">
+                        <button type="button" data-action="undoNode">Undo Image Edit <kbd>Ctrl+Z</kbd></button>
+                        <button type="button" data-action="redoNode">Redo Image Edit <kbd>Ctrl+Y</kbd></button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="addPropertyModal">Add Property... <kbd>Ins</kbd></button>
+                        <button type="button" data-action="addImageModal">Add .img Image...</button>
+                        <button type="button" data-action="addDirectoryModal">Add Directory...</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="copyNode">Copy Node <kbd>Ctrl+C</kbd></button>
+                        <button type="button" data-action="pasteNode">Paste Node <kbd>Ctrl+V</kbd></button>
+                        <button type="button" data-action="duplicateNode">Duplicate Node <kbd>Ctrl+D</kbd></button>
+                        <button type="button" data-action="renameNodePrompt">Rename Node <kbd>F2</kbd></button>
+                        <button type="button" data-action="deleteNode" class="danger-item">Delete Node <kbd>Del</kbd></button>
+                    </div>
+                </div>
+
+                <div class="menu-item" data-menu="tools">
+                    <button type="button" class="menu-trigger">Tools</button>
+                    <div class="menu-dropdown">
+                        <button type="button" data-action="focusGlobalSearch">Global WZ Search... <kbd>Ctrl+F</kbd></button>
+                        <button type="button" data-action="inlineOutlinksNode">Inline _outlink / _inlink Sprites</button>
+                        <button type="button" data-action="openBatchExportTab">Batch Export Sprites / Audio / JSON...</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="exportSelectedJson">Export Selected Node as .json</button>
+                        <button type="button" data-action="exportSelectedImg">Export Selected Image as .img</button>
+                    </div>
+                </div>
+
+                <div class="menu-item" data-menu="view">
+                    <button type="button" class="menu-trigger">View</button>
+                    <div class="menu-dropdown">
+                        <button type="button" data-action="toggleCrosshair">Toggle Origin Crosshair</button>
+                        <button type="button" data-action="toggleVectors">Toggle Vector Bounds (lt/rb/head)</button>
+                        <button type="button" data-action="togglePixelGrid">Toggle Pixel Grid</button>
+                        <div class="menu-sep"></div>
+                        <button type="button" data-action="toggleWorkbench">Toggle Bottom Workbench</button>
+                        <button type="button" data-action="resetLayout">Reset Workspace Layout</button>
+                    </div>
+                </div>
+            </nav>
+
+            <!-- Quick Command Toolbar -->
+            <div class="command-toolbar">
+                <button type="button" class="cmd-btn primary" id="btnOpenFile" title="Open .wz file from disk or upload">
+                    <span>Open .wz</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnOpenDir" title="Open Data directory of .wz archives">
+                    <span>Open Folder</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnNewArchive" title="Create new empty .wz archive">
+                    <span>New .wz</span>
+                </button>
+                <button type="button" class="cmd-btn accent" id="btnRepackSave" title="Repack and download/save active .wz archive">
+                    <span>Repack &amp; Save .wz</span>
+                </button>
+
+                <span class="toolbar-divider"></span>
+
+                <button type="button" class="cmd-btn" id="btnAddProp" title="Add property to current .img or SubProperty (Insert)">
+                    <span>+ Property</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnAddImg" title="Add .img image to current archive/directory">
+                    <span>+ .img</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnAddDir" title="Add directory to current archive">
+                    <span>+ Dir</span>
+                </button>
+
+                <span class="toolbar-divider"></span>
+
+                <button type="button" class="cmd-btn" id="btnUndo" title="Undo last edit in current .img (Ctrl+Z)" disabled>
+                    <span>Undo</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnRedo" title="Redo edit in current .img (Ctrl+Y)" disabled>
+                    <span>Redo</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnInlineLinks" title="Resolve and inline _outlink / _inlink sprites into standalone Canvas pixels">
+                    <span>Inline Links</span>
+                </button>
+                <button type="button" class="cmd-btn" id="btnSearchShortcut" title="Search across all open WZ archives (Ctrl+F)">
+                    <span>Search</span>
+                </button>
+            </div>
+
+            <div class="status-cluster">
+                <span class="clipboard-pill hidden" id="clipboardPill" title="Copied node in clipboard"></span>
+                <span class="conn-badge connected" id="connBadge">
+                    <span class="conn-dot"></span>
+                    <span id="connText">Engine Ready</span>
+                </span>
+            </div>
+        </header>
+
+        <!-- Upper 3-Pane Workspace -->
+        <div class="workspace-body">
+            <!-- Left Pane: WZ Multi-Archive Tree Explorer -->
+            <aside class="pane tree-pane" id="treePane">
+                <div class="pane-header">
+                    <div class="pane-title-group">
+                        <span class="pane-title">WZ Explorer</span>
+                        <span class="pane-badge" id="archiveCountBadge">0 archives</span>
+                    </div>
+                    <div class="pane-actions">
+                        <button type="button" class="icon-btn" id="btnLoadSamples" title="Reload Classic v779 Sample Workspace">Sample</button>
+                        <button type="button" class="icon-btn" id="btnCollapseAll" title="Collapse all expanded nodes">Collapse</button>
+                    </div>
+                </div>
+
+                <!-- Archive Switcher Strip -->
+                <div class="archive-tabs-strip" id="archiveTabsStrip"></div>
+
+                <!-- Tree Filter Input -->
+                <div class="tree-filter-bar">
+                    <input type="text" id="treeFilterInput" class="input-compact" placeholder="Filter visible tree nodes..." autocomplete="off" />
+                    <button type="button" class="icon-btn" id="btnClearTreeFilter" title="Clear filter">&times;</button>
+                </div>
+
+                <!-- Virtualized / Lazy Tree Container -->
+                <div class="tree-scroll-container" id="treeContainer" tabindex="0"></div>
+            </aside>
+
+            <div class="splitter-v" id="leftSplitter" title="Drag to resize WZ Explorer"></div>
+
+            <!-- Center Pane: Visual Canvas, Animation & Audio Stage -->
+            <main class="pane stage-pane" id="stagePane">
+                <!-- Breadcrumb & Node Header Bar -->
+                <div class="stage-header">
+                    <div class="breadcrumb-bar" id="breadcrumbBar"></div>
+                    <div class="stage-meta-badges" id="stageMetaBadges"></div>
+                </div>
+
+                <!-- Dynamic Stage Content Area -->
+                <div class="stage-content" id="stageContent">
+                    <!-- 1. Canvas & Animation Viewport Section -->
+                    <section class="canvas-stage-section hidden" id="canvasStageSection">
+                        <div class="canvas-toolbar">
+                            <div class="toolbar-group">
+                                <span class="toolbar-label">BG</span>
+                                <button type="button" class="seg-btn active" data-bg="checker" title="Checkerboard transparency grid">Grid</button>
+                                <button type="button" class="seg-btn" data-bg="dark" title="Dark charcoal background">Dark</button>
+                                <button type="button" class="seg-btn" data-bg="light" title="Light background">Light</button>
+                                <button type="button" class="seg-btn" data-bg="green" title="Chroma green background">Green</button>
+                            </div>
+
+                            <div class="toolbar-group">
+                                <span class="toolbar-label">Zoom</span>
+                                <button type="button" class="seg-btn" id="btnZoomOut" title="Zoom Out">-</button>
+                                <span class="zoom-readout" id="zoomReadout">200%</span>
+                                <button type="button" class="seg-btn" id="btnZoomIn" title="Zoom In">+</button>
+                                <button type="button" class="seg-btn" id="btnZoom1x" title="100% Pixel-Perfect">1:1</button>
+                                <button type="button" class="seg-btn" id="btnZoomReset" title="Reset Pan &amp; Zoom">Center</button>
+                            </div>
+
+                            <div class="toolbar-group">
+                                <label class="toggle-pill" title="Show sprite origin anchor crosshair (origin vector)">
+                                    <input type="checkbox" id="chkShowOrigin" checked />
+                                    <span>Origin</span>
+                                </label>
+                                <label class="toggle-pill" title="Show lt/rb bounding box and head vector overlays">
+                                    <input type="checkbox" id="chkShowVectors" checked />
+                                    <span>Vectors (lt/rb/head)</span>
+                                </label>
+                                <label class="toggle-pill" title="Show pixel grid when zoomed in (>= 300%)">
+                                    <input type="checkbox" id="chkShowPixelGrid" />
+                                    <span>Pixel Grid</span>
+                                </label>
+                            </div>
+
+                            <div class="toolbar-group right-aligned">
+                                <select id="canvasFormatSelect" class="select-compact" title="Convert WZ Canvas pixel format">
+                                    <option value="1">Format 1 &bull; BGRA4444</option>
+                                    <option value="2">Format 2 &bull; BGRA8888</option>
+                                    <option value="513">Format 513 &bull; BGR565</option>
+                                    <option value="517">Format 517 &bull; Block16</option>
+                                    <option value="1026">Format 1026 &bull; DXT3</option>
+                                    <option value="2050">Format 2050 &bull; DXT5</option>
+                                </select>
+                                <button type="button" class="cmd-btn small" id="btnConvertCanvasFormat" title="Re-encode Canvas into selected WZ pixel format">Convert</button>
+                                <button type="button" class="cmd-btn small" id="btnReplacePng" title="Import a .png file to replace this Canvas sprite">Import .png</button>
+                                <button type="button" class="cmd-btn small" id="btnExportPng" title="Export current sprite as .png">Export .png</button>
+                            </div>
+                        </div>
+
+                        <!-- Outlink / Inlink Banner (shown when sprite uses _outlink or _inlink) -->
+                        <div class="link-resolution-banner hidden" id="linkResolutionBanner">
+                            <div class="link-banner-text" id="linkBannerText"></div>
+                            <div class="link-banner-actions">
+                                <button type="button" class="cmd-btn small" id="btnJumpToLinkedTarget">Jump to Target</button>
+                                <button type="button" class="cmd-btn small accent" id="btnInlineCurrentCanvas">Inline Sprite Here</button>
+                            </div>
+                        </div>
+
+                        <!-- Interactive Pan/Zoom Canvas Viewport -->
+                        <div class="canvas-viewport bg-checker" id="canvasViewport">
+                            <canvas id="spriteCanvas" width="480" height="320"></canvas>
+                            <div class="canvas-hud-overlay" id="canvasHudOverlay"></div>
+                        </div>
+
+                        <!-- Animation Player Strip (shown when node has animation frames) -->
+                        <div class="animation-player-bar hidden" id="animPlayerBar">
+                            <div class="anim-controls">
+                                <button type="button" class="cmd-btn small primary" id="btnAnimPlayPause">Pause</button>
+                                <button type="button" class="cmd-btn small" id="btnAnimPrev" title="Previous Frame">&laquo;</button>
+                                <span class="anim-frame-counter" id="animFrameCounter">Frame 0 / 0</span>
+                                <button type="button" class="cmd-btn small" id="btnAnimNext" title="Next Frame">&raquo;</button>
+                            </div>
+                            <div class="anim-timeline-strip" id="animTimelineStrip"></div>
+                        </div>
+                    </section>
+
+                    <!-- 2. Sound_DX8 Audio Player Section -->
+                    <section class="sound-stage-section hidden" id="soundStageSection">
+                        <div class="sound-card">
+                            <div class="sound-card-header">
+                                <div>
+                                    <div class="sound-title" id="soundTitle">Sound_DX8 Stream</div>
+                                    <div class="sound-subtitle" id="soundSubtitle">DirectSound8 Audio Resource</div>
+                                </div>
+                                <div class="sound-actions">
+                                    <button type="button" class="cmd-btn small" id="btnReplaceAudio">Import .mp3 / .wav</button>
+                                    <button type="button" class="cmd-btn small accent" id="btnExportAudio">Export Audio</button>
+                                </div>
+                            </div>
+                            <canvas id="waveformCanvas" width="600" height="96" class="waveform-canvas"></canvas>
+                            <audio id="audioPlayerEl" controls class="audio-player-el"></audio>
+                            <div class="sound-metrics-grid" id="soundMetricsGrid"></div>
+                        </div>
+                    </section>
+
+                    <!-- 3. Sub-Properties & Children Table Section -->
+                    <section class="children-table-section" id="childrenTableSection">
+                        <div class="section-subbar">
+                            <span class="section-subtitle" id="childrenTableTitle">Child Nodes</span>
+                            <span class="section-submeta" id="childrenTableMeta">Double-click a row to open</span>
+                        </div>
+                        <div class="table-scroll-wrap">
+                            <table class="data-table" id="childrenTable">
+                                <thead>
+                                    <tr>
+                                        <th style="width: 34%">Name</th>
+                                        <th style="width: 12%">Type</th>
+                                        <th style="width: 38%">Value / Summary</th>
+                                        <th style="width: 16%; text-align: right">Size / Items</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="childrenTableBody"></tbody>
+                            </table>
+                        </div>
+                    </section>
+                </div>
+            </main>
+
+            <div class="splitter-v" id="rightSplitter" title="Drag to resize Property Inspector"></div>
+
+            <!-- Right Pane: Property Inspector & Value Editor -->
+            <aside class="pane inspector-pane" id="inspectorPane">
+                <div class="pane-header">
+                    <div class="pane-title-group">
+                        <span class="pane-title">Property Inspector</span>
+                        <span class="type-pill" id="inspectorTypePill">NONE</span>
+                    </div>
+                    <div class="pane-actions">
+                        <button type="button" class="icon-btn" id="btnRenameNode" title="Rename selected node (F2)">Rename</button>
+                        <button type="button" class="icon-btn danger" id="btnDeleteNode" title="Delete selected node (Del)">Delete</button>
+                    </div>
+                </div>
+
+                <div class="inspector-scroll" id="inspectorBody">
+                    <!-- Metadata KV Grid -->
+                    <div class="inspector-card">
+                        <div class="card-heading">Node Metadata</div>
+                        <div class="kv-grid" id="inspectorMetaGrid"></div>
+                    </div>
+
+                    <!-- Value Editor Form -->
+                    <div class="inspector-card" id="valueEditorCard">
+                        <div class="card-heading">Edit Property Value</div>
+                        <form id="propertyEditForm" class="inspector-form">
+                            <div class="form-row">
+                                <label for="editPropKind">Property Type</label>
+                                <select id="editPropKind" class="select-full">
+                                    <option value="Short">Short (Int16)</option>
+                                    <option value="Int">Int (Compressed Int32)</option>
+                                    <option value="Long">Long (Int64)</option>
+                                    <option value="Float">Float (Single)</option>
+                                    <option value="Double">Double (Float64)</option>
+                                    <option value="String">String</option>
+                                    <option value="Uol">UOL (Relative Path Link)</option>
+                                    <option value="Vector">Vector2D (X, Y)</option>
+                                    <option value="Null">Null</option>
+                                    <option value="Canvas">Canvas Metadata (Origin / Delay)</option>
+                                </select>
+                            </div>
+
+                            <div class="form-row" id="scalarInputGroup">
+                                <label for="editScalarValue" id="scalarValueLabel">Value</label>
+                                <input type="text" id="editScalarValue" class="input-full" placeholder="Enter property value..." />
+                            </div>
+
+                            <div class="form-row two-col hidden" id="vectorInputGroup">
+                                <div>
+                                    <label for="editVecX">X Coordinate</label>
+                                    <input type="number" id="editVecX" class="input-full" value="0" />
+                                </div>
+                                <div>
+                                    <label for="editVecY">Y Coordinate</label>
+                                    <input type="number" id="editVecY" class="input-full" value="0" />
+                                </div>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="cmd-btn primary full-width" id="btnApplyValue">Apply Value Change</button>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Quick Node Operations Card -->
+                    <div class="inspector-card">
+                        <div class="card-heading">Node Operations</div>
+                        <div class="action-grid">
+                            <button type="button" class="cmd-btn small" id="btnInspAddChild">+ Child Property</button>
+                            <button type="button" class="cmd-btn small" id="btnInspDuplicate">Duplicate</button>
+                            <button type="button" class="cmd-btn small" id="btnInspCopy">Copy</button>
+                            <button type="button" class="cmd-btn small" id="btnInspPaste">Paste</button>
+                            <button type="button" class="cmd-btn small" id="btnInspExportJson">Export .json</button>
+                            <button type="button" class="cmd-btn small" id="btnInspExportAuto">Export Binary</button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </div>
+
+        <div class="splitter-h" id="bottomSplitter" title="Drag to resize Bottom Workbench"></div>
+
+        <!-- Bottom Workbench (JSON Editor, Global Search, Hex Dump, Batch Tools, Console Logs) -->
+        <section class="workbench-pane" id="workbenchPane">
+            <div class="workbench-header">
+                <div class="workbench-tabs" id="workbenchTabs">
+                    <button type="button" class="wb-tab active" data-tab="json">JSON Subtree Editor</button>
+                    <button type="button" class="wb-tab" data-tab="search">Global WZ Search <span class="tab-pill" id="searchCountPill">0</span></button>
+                    <button type="button" class="wb-tab" data-tab="hex">Hex &amp; Binary Inspector</button>
+                    <button type="button" class="wb-tab" data-tab="batch">Batch Export &amp; Repack</button>
+                    <button type="button" class="wb-tab" data-tab="logs">Console Logs <span class="tab-pill" id="logCountPill">0</span></button>
+                </div>
+
+                <div class="workbench-actions">
+                    <div id="wbJsonActions" class="wb-action-group">
+                        <button type="button" class="cmd-btn small primary" id="btnApplyJsonSubtree" title="Parse and apply JSON changes to selected node (Ctrl+S)">Apply JSON (Ctrl+S)</button>
+                        <button type="button" class="cmd-btn small" id="btnFormatJson">Format</button>
+                        <button type="button" class="cmd-btn small" id="btnResetJson">Revert</button>
+                    </div>
+                    <button type="button" class="icon-btn" id="btnToggleWorkbenchCollapse" title="Collapse or expand workbench">&#9662;</button>
+                </div>
+            </div>
+
+            <div class="workbench-body">
+                <!-- Tab 1: CodeMirror 6 JSON Subtree Editor -->
+                <div class="wb-panel active" id="wbPanelJson">
+                    <div class="cm6-host" id="jsonEditorHost"></div>
+                </div>
+
+                <!-- Tab 2: Global Search -->
+                <div class="wb-panel" id="wbPanelSearch">
+                    <div class="search-controls-bar">
+                        <select id="searchArchiveScope" class="select-compact">
+                            <option value="">All Open WZ Archives</option>
+                        </select>
+                        <input type="text" id="searchQueryInput" class="input-compact grow" placeholder="Search node name, path, or text (e.g. Snail, 01040000, stand1, reqLevel)..." />
+                        <input type="text" id="searchValueInput" class="input-compact" placeholder="Optional value filter..." />
+                        <select id="searchKindSelect" class="select-compact">
+                            <option value="">Any Property Type</option>
+                            <option value="Canvas">Canvas (Sprite)</option>
+                            <option value="Sound">Sound_DX8 (Audio)</option>
+                            <option value="String">String</option>
+                            <option value="Int">Int / Short / Long</option>
+                            <option value="Vector">Vector2D</option>
+                            <option value="Uol">UOL Link</option>
+                            <option value="Object">SubProperty (Object)</option>
+                        </select>
+                        <label class="toggle-pill"><input type="checkbox" id="chkSearchExact" /><span>Exact</span></label>
+                        <button type="button" class="cmd-btn small primary" id="btnRunSearch">Search</button>
+                    </div>
+                    <div class="table-scroll-wrap">
+                        <table class="data-table" id="searchResultsTable">
+                            <thead>
+                                <tr>
+                                    <th style="width: 18%">Archive</th>
+                                    <th style="width: 38%">Path</th>
+                                    <th style="width: 10%">Type</th>
+                                    <th style="width: 34%">Value / Summary</th>
+                                </tr>
+                            </thead>
+                            <tbody id="searchResultsBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Tab 3: Hex & ASCII Inspector -->
+                <div class="wb-panel" id="wbPanelHex">
+                    <div class="hex-workbench-layout">
+                        <div class="hex-dump-scroll" id="hexDumpContainer"></div>
+                        <div class="hex-data-inspector" id="hexDataInspector"></div>
+                    </div>
+                </div>
+
+                <!-- Tab 4: Batch Export & Repack Tools -->
+                <div class="wb-panel" id="wbPanelBatch">
+                    <div class="batch-tools-grid">
+                        <div class="batch-card">
+                            <div class="card-heading">Bulk Asset Export to Disk Directory</div>
+                            <p class="batch-desc">Export all sprites, audio streams, JSON trees, or raw .img files under the currently selected Archive, Directory, or .img node.</p>
+                            <div class="batch-form-row">
+                                <input type="text" id="batchOutputDirInput" class="input-full" placeholder="/path/to/export/folder" />
+                                <select id="batchExportModeSelect" class="select-compact">
+                                    <option value="png">PNG Sprites (.png)</option>
+                                    <option value="sound">Sound_DX8 Audio (.wav / .mp3)</option>
+                                    <option value="json">JSON Property Trees (.json)</option>
+                                    <option value="img">Raw WZ Images (.img)</option>
+                                    <option value="all">All Sprites + Audio</option>
+                                </select>
+                                <button type="button" class="cmd-btn primary" id="btnRunBatchExport">Run Bulk Export</button>
+                            </div>
+                        </div>
+
+                        <div class="batch-card">
+                            <div class="card-heading">Repack &amp; Outlink Maintenance</div>
+                            <p class="batch-desc">Resolve external <code>_outlink</code> and internal <code>_inlink</code> references across open <code>_Canvas</code> archives and bake standalone pixel payloads directly into the target archive.</p>
+                            <div class="batch-form-row">
+                                <button type="button" class="cmd-btn accent" id="btnBatchInlineSelected">Inline Links in Selected Scope</button>
+                                <button type="button" class="cmd-btn" id="btnBatchDownloadWz">Download Repacked .wz Archive</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tab 5: Console Logs -->
+                <div class="wb-panel" id="wbPanelLogs">
+                    <div class="logs-toolbar">
+                        <span class="logs-hint">Real-time WZ parser, canvas codec, and repacker telemetry</span>
+                        <button type="button" class="cmd-btn small" id="btnClearLogs">Clear Logs</button>
+                    </div>
+                    <div class="logs-scroll" id="logsContainer"></div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Hidden File Inputs for Browser Uploads -->
+    <input type="file" id="hiddenWzFileInput" accept=".wz" class="hidden" />
+    <input type="file" id="hiddenPngFileInput" accept=".png,image/png" class="hidden" />
+    <input type="file" id="hiddenAudioFileInput" accept=".mp3,.wav,audio/*" class="hidden" />
+    <input type="file" id="hiddenImgFileInput" accept=".img,.json" class="hidden" />
+
+    <!-- Context Menu -->
+    <div class="context-menu hidden" id="treeContextMenu">
+        <button type="button" data-ctx="inspect">Inspect Node</button>
+        <div class="menu-sep"></div>
+        <button type="button" data-ctx="addProp">+ Add Child Property...</button>
+        <button type="button" data-ctx="addImg">+ Add .img Image...</button>
+        <button type="button" data-ctx="addDir">+ Add Directory...</button>
+        <div class="menu-sep"></div>
+        <button type="button" data-ctx="copy">Copy <kbd>Ctrl+C</kbd></button>
+        <button type="button" data-ctx="paste">Paste <kbd>Ctrl+V</kbd></button>
+        <button type="button" data-ctx="duplicate">Duplicate <kbd>Ctrl+D</kbd></button>
+        <button type="button" data-ctx="rename">Rename <kbd>F2</kbd></button>
+        <div class="menu-sep"></div>
+        <button type="button" data-ctx="inlineLinks">Inline _outlink / _inlink Sprites</button>
+        <button type="button" data-ctx="exportAuto">Export Node...</button>
+        <div class="menu-sep"></div>
+        <button type="button" data-ctx="delete" class="danger-item">Delete Node <kbd>Del</kbd></button>
+    </div>
+
+    <!-- Modal Overlay -->
+    <div class="modal-backdrop hidden" id="modalBackdrop">
+        <div class="modal-dialog" id="modalDialog">
+            <div class="modal-header">
+                <h3 class="modal-title" id="modalTitle">Modal Title</h3>
+                <button type="button" class="icon-btn" id="btnCloseModal">&times;</button>
+            </div>
+            <div class="modal-body" id="modalBody"></div>
+            <div class="modal-footer" id="modalFooter"></div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Banner -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="vendor/msgpack/msgpack.min.js"></script>
+    <script src="vendor/codemirror/cm6.bundle.js"></script>
+    <script src="rpc.js"></script>
+    <script src="layout.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <Authors>Ochirasu</Authors>
+        <Description>WZ archive repacker, canvas/sound codec, and workspace engine for MapleStory Classic World (MSCW).</Description>
+        <PackageLicenseExpression>GPL-3.0-only</PackageLicenseExpression>
+        <Title>MapleStory Classic WZ Repacker Engine</Title>
+        <TargetFramework>net10.0</TargetFramework>
+        <LangVersion>latest</LangVersion>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <ProjectReference Include="..\Maple.Classic.File\Maple.Classic.File.IO\Maple.Classic.File.IO.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+        <InternalsVisibleTo Include="Maple.Classic.Repacker.Tests" />
+    </ItemGroup>
+
+</Project>
