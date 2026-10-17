@@ -53,7 +53,16 @@ public sealed class UserSettingsStore {
         settings = LoadFromDisk();
     }
 
+    /// <summary>
+    /// Settings live next to the executable by default (portable Windows build). Launchers whose install directory is
+    /// read-only (e.g. the Electron shell inside a macOS <c>.app</c> or Linux AppImage) set
+    /// <c>MAPLE_REPACKER_SETTINGS_PATH</c> to a per-user location instead.
+    /// </summary>
     private static string ResolveDefaultSettingsFilePath() {
+        string? overridePath = Environment.GetEnvironmentVariable("MAPLE_REPACKER_SETTINGS_PATH");
+        if (!string.IsNullOrWhiteSpace(overridePath)) {
+            return Path.GetFullPath(overridePath);
+        }
         string exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
         return Path.Combine(exeDir, "repacker-settings.json");
     }

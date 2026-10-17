@@ -1,0 +1,55 @@
+{
+  "name": "maple-classic-repacker-desktop",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cross-platform Electron shell for Maple.Classic.Repacker (hosts the headless .NET backend).",
+  "author": "Ochirasu",
+  "license": "GPL-3.0-only",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "npm run build && electron .",
+    "publish:backend": "node scripts/publish-backend.mjs",
+    "dist": "npm run build && npm run publish:backend && electron-builder"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "electron": "^38.2.0",
+    "electron-builder": "^26.0.12",
+    "typescript": "^5.9.3"
+  },
+  "build": {
+    "appId": "com.ochirasu.maple-classic-repacker",
+    "productName": "Maple Classic Repacker",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "build/backend",
+        "to": "backend"
+      }
+    ],
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Development"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}

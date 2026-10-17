@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Net.WebSockets;
@@ -14,20 +15,22 @@ using Microsoft.Extensions.DependencyInjection;
 namespace Maple.Classic.Repacker.UI;
 
 public class Program {
+    /// <summary>Switches handled by this program; they take no value, so keep them away from ASP.NET's
+    /// "--key value" command-line parser, which would otherwise swallow the next argument (e.g. "--urls").</summary>
+    private static readonly HashSet<string> ShellSwitches = new(StringComparer.OrdinalIgnoreCase) { "--headless", "--server" };
+
     [STAThread]
     public static void Main(string[] args) {
         string webRoot = ResolveWebRootPath();
         WebApplicationBuilder builder = WebApplication.CreateBuilder(new WebApplicationOptions {
-            Args = args,
+            Args = args.Where(a => !ShellSwitches.Contains(a)).ToArray(),
             ContentRootPath = Path.GetDirectoryName(webRoot) ?? AppContext.BaseDirectory,
             WebRootPath = webRoot,
         });
 
+        // ResolveListenUrl already honours --urls and ASPNETCORE_URLS, then falls back to a free loopback port.
         string listenUrl = ResolveListenUrl(args);
-        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("ASPNETCORE_URLS")) &&
-            !args.Any(a => a.StartsWith("--urls", StringComparison.OrdinalIgnoreCase))) {
-            builder.WebHost.UseUrls(listenUrl);
-        }
+        builder.WebHost.UseUrls(listenUrl);
 
         var workspace = new RepackerWorkspace();
         var settingsStore = new UserSettingsStore();
@@ -57,6 +60,7 @@ public class Program {
         var rpcRouter = new RpcRouter(rpcContext);
 
         WebApplication app = builder.Build();
+        StopWhenParentProcessExits(app);
         app.UseDefaultFiles();
         var noCacheStaticOptions = new StaticFileOptions {
             OnPrepareResponse = ctx => {
@@ -225,6 +229,27 @@ public class Program {
 #endif
         app.RunAsync().GetAwaiter().GetResult();
         broadcastCts.Cancel();
+    }
+
+    /// <summary>
+    /// When hosted by the Electron shell (which sets <c>MAPLE_REPACKER_PARENT_PID</c>), shut down if that shell exits
+    /// without stopping us (e.g. it crashed), so no orphaned backend keeps running.
+    /// </summary>
+    private static void StopWhenParentProcessExits(WebApplication app) {
+        if (!int.TryParse(Environment.GetEnvironmentVariable("MAPLE_REPACKER_PARENT_PID"), out int parentPid)) {
+            return;
+        }
+        Process parent;
+        try {
+            parent = Process.GetProcessById(parentPid);
+        } catch (ArgumentException) {
+            Environment.Exit(0); // Parent is already gone
+            return;
+        }
+        _ = Task.Run(async () => {
+            await parent.WaitForExitAsync().ConfigureAwait(false);
+            await app.StopAsync().ConfigureAwait(false);
+        });
     }
 
     private static string ResolveListenUrl(string[] args) {

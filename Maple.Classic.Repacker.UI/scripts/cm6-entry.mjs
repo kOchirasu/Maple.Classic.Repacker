@@ -34,7 +34,7 @@ import {
     closeBracketsKeymap,
     acceptCompletion,
 } from '@codemirror/autocomplete';
-import { python } from '@codemirror/lang-python';
+import { json } from '@codemirror/lang-json';
 import { tags } from '@lezer/highlight';
 
 const WZ_JSON_COMPLETIONS = [
@@ -157,7 +157,7 @@ function buildExtensions(onChangeCallback, onSaveCallback) {
         crosshairCursor(),
         highlightActiveLine(),
         highlightSelectionMatches(),
-        python(),
+        json(),
         mapleDarkTheme,
         keymap.of([
             {

@@ -85,6 +85,8 @@ lerna-debug.log*
 .yarn-integrity
 dist/
 out/
+# Electron shell: backend published by electron/scripts/publish-backend.mjs
+Maple.Classic.Repacker.UI/electron/build/
 
 # Python / IronPython caches
 __pycache__/

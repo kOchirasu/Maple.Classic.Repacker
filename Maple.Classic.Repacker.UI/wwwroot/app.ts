@@ -16,6 +16,7 @@ interface Window {
             addEventListener(type: 'message', listener: (ev: MessageEvent) => void): void;
         };
     };
+    mapleHost?: MapleRepacker.ElectronHostApi;
 }
 
 namespace MapleRepacker {
@@ -53,7 +54,7 @@ namespace MapleRepacker {
         private selectedPath = '';
         private currentInspection: NodeInspectionDto | null = null;
         private recentPaths: string[] = [];
-        private supportsNativeDialogs = false;
+        private backendSupportsNativeDialogs = false;
         private treeFilterText = '';
         private appliedInitialUiState = false;
 
@@ -143,7 +144,7 @@ namespace MapleRepacker {
         private async handleWorkspaceStatus(status: WorkspaceStatusPayloadDto): Promise<void> {
             this.archives = status.archives || [];
             this.recentPaths = status.recentPaths || [];
-            this.supportsNativeDialogs = Boolean(status.supportsNativeDialogs);
+            this.backendSupportsNativeDialogs = Boolean(status.supportsNativeDialogs);
 
             if (!this.appliedInitialUiState && status.uiState) {
                 this.appliedInitialUiState = true;
@@ -1827,28 +1828,21 @@ namespace MapleRepacker {
                 });
             });
 
-            window.chrome?.webview?.addEventListener('message', (ev: MessageEvent) => {
-                try {
-                    const data = typeof ev.data === 'string' ? JSON.parse(ev.data) : ev.data;
-                    if (!data || typeof data.type !== 'string') {
-                        return;
-                    }
-                    if (data.type === HostWebMessageType.TreeContextMenuCommand) {
-                        void this.executeContextMenuCommand(
-                            String(data.cmd || '') as TreeContextMenuCommand,
-                            String(data.archiveId || ''),
-                            String(data.path || '')
-                        );
-                    } else if (data.type === HostWebMessageType.RequestAppClose) {
-                        this.handleAppCloseRequest();
-                    }
-                } catch {
-                    // Ignore malformed host messages
+            desktopHost.onMessage((data) => {
+                if (data.type === HostWebMessageType.TreeContextMenuCommand) {
+                    void this.executeContextMenuCommand(
+                        String(data.cmd || '') as TreeContextMenuCommand,
+                        String(data.archiveId || ''),
+                        String(data.path || '')
+                    );
+                } else if (data.type === HostWebMessageType.RequestAppClose) {
+                    this.handleAppCloseRequest();
                 }
             });
 
+            // Desktop shells route window close through RequestAppClose; only a plain browser tab needs beforeunload.
             window.addEventListener('beforeunload', (ev: BeforeUnloadEvent) => {
-                if (!window.chrome?.webview && this.getDirtyArchives().length > 0) {
+                if (!desktopHost.isDesktop && this.getDirtyArchives().length > 0) {
                     ev.preventDefault();
                     ev.returnValue = '';
                 }
@@ -1910,8 +1904,8 @@ namespace MapleRepacker {
 
         private closeContextMenu(): void {
             document.getElementById('treeContextMenu')?.classList.add('hidden');
-            if (window.chrome?.webview?.postMessage) {
-                window.chrome.webview.postMessage(JSON.stringify({ type: HostWebMessageType.CloseTreeContextMenu }));
+            if (desktopHost.isDesktop) {
+                desktopHost.postMessage({ type: HostWebMessageType.CloseTreeContextMenu });
             }
         }
 
@@ -1926,16 +1920,14 @@ namespace MapleRepacker {
             this.ctxTargetPath = path;
             const isDeleted = changeState === RepackerChangeState.Deleted;
 
-            if (window.chrome?.webview?.postMessage) {
-                window.chrome.webview.postMessage(
-                    JSON.stringify({
-                        type: HostWebMessageType.OpenTreeContextMenu,
-                        archiveId,
-                        path,
-                        changeState,
-                        isDeleted,
-                    })
-                );
+            if (desktopHost.isDesktop) {
+                desktopHost.postMessage({
+                    type: HostWebMessageType.OpenTreeContextMenu,
+                    archiveId,
+                    path,
+                    changeState,
+                    isDeleted,
+                });
                 return;
             }
 
@@ -2694,14 +2686,12 @@ namespace MapleRepacker {
 
         private async saveOrExportSingleArchive(ar: ArchiveSummaryDto): Promise<boolean> {
             let targetFilePath = (ar.filePath || '').trim();
-            if (!targetFilePath && this.supportsNativeDialogs) {
-                const browseRes = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseSaveFile, {
-                    defaultFileName: ar.name,
-                });
-                if (browseRes.data?.cancelled || !browseRes.ok || !browseRes.data?.path) {
+            if (!targetFilePath && this.hasNativeDialogs) {
+                const pickedPath = await this.pickSaveWzPath(ar.name);
+                if (!pickedPath) {
                     return false;
                 }
-                targetFilePath = browseRes.data.path;
+                targetFilePath = pickedPath;
             }
 
             if (targetFilePath) {
@@ -2729,7 +2719,7 @@ namespace MapleRepacker {
                 ar.modifiedImageCount > 0
                     ? ` (${ar.modifiedImageCount} modified image${ar.modifiedImageCount === 1 ? '' : 's'})`
                     : '';
-            const canSaveDisk = Boolean(ar.filePath) || this.supportsNativeDialogs;
+            const canSaveDisk = Boolean(ar.filePath) || this.hasNativeDialogs;
             const saveLabel = canSaveDisk ? 'Save &amp; Close' : 'Export .wz &amp; Close';
             const discardLabel = canSaveDisk ? 'Close Without Saving' : 'Close Without Exporting';
 
@@ -2763,8 +2753,8 @@ namespace MapleRepacker {
         }
 
         private confirmHostAppClose(): void {
-            if (window.chrome?.webview?.postMessage) {
-                window.chrome.webview.postMessage(JSON.stringify({ type: HostWebMessageType.ConfirmAppClose }));
+            if (desktopHost.isDesktop) {
+                desktopHost.postMessage({ type: HostWebMessageType.ConfirmAppClose });
             }
         }
 
@@ -3028,7 +3018,7 @@ namespace MapleRepacker {
         }
 
         private triggerOpenWzFile(): void {
-            if (this.supportsNativeDialogs) {
+            if (this.hasNativeDialogs) {
                 void this.browseNativeWzFile();
             } else {
                 (document.getElementById('hiddenWzFileInput') as HTMLInputElement).click();
@@ -3036,16 +3026,7 @@ namespace MapleRepacker {
         }
 
         private async browseNativeWzFile(): Promise<void> {
-            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseFiles, {});
-            if (res.data?.cancelled) {
-                return;
-            }
-            if (!res.ok) {
-                this.showToast(res.data?.error || 'Could not browse files', ToastKind.Error);
-                return;
-            }
-
-            const filePaths = res.data.filePaths || [];
+            const filePaths = await this.pickWzFilePaths();
             if (filePaths.length === 0) {
                 return;
             }
@@ -3085,7 +3066,7 @@ namespace MapleRepacker {
         }
 
         private triggerOpenDirectory(): void {
-            if (this.supportsNativeDialogs) {
+            if (this.hasNativeDialogs) {
                 void this.browseNativeDirectory();
             } else {
                 this.openDirectoryModal();
@@ -3093,21 +3074,63 @@ namespace MapleRepacker {
         }
 
         private async browseNativeDirectory(): Promise<void> {
-            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseAndOpenDirectory, {});
-            if (res.data?.cancelled) {
-                return;
+            const directoryPath = await this.pickDirectoryPath();
+            if (directoryPath) {
+                await this.openDataDirectory(directoryPath);
             }
-            if (res.ok) {
-                this.treeState.childrenByParent.clear();
-                const count = res.data.archives?.length ?? 0;
-                this.showToast(`Loaded ${count} WZ archive${count === 1 ? '' : 's'}`, ToastKind.Success);
-                if (res.data.archiveId) {
-                    await this.fetchTreeChildren(res.data.archiveId, '');
-                    await this.selectAndInspectNode(res.data.archiveId, '', true);
-                }
-            } else {
+        }
+
+        /** Opens every .wz archive under a data directory. Returns true on success. */
+        private async openDataDirectory(directoryPath: string): Promise<boolean> {
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceOpenDirectory, { directoryPath });
+            if (!res.ok) {
                 this.showToast(res.data?.error || 'Failed to open directory', ToastKind.Error);
+                return false;
             }
+            this.treeState.childrenByParent.clear();
+            const count = res.data.archives?.length ?? 0;
+            this.showToast(`Loaded ${count} WZ archive${count === 1 ? '' : 's'} from ${directoryPath}`, ToastKind.Success);
+            if (res.data.archiveId) {
+                await this.fetchTreeChildren(res.data.archiveId, '');
+                await this.selectAndInspectNode(res.data.archiveId, '', true);
+            }
+            return true;
+        }
+
+        // ---------------------------------------------------------------------
+        // Native dialogs: provided by the Electron shell when present, otherwise
+        // by the Windows backend over RPC (WebView2 shell).
+        // ---------------------------------------------------------------------
+
+        private get hasNativeDialogs(): boolean {
+            return desktopHost.kind === DesktopHostKind.Electron || this.backendSupportsNativeDialogs;
+        }
+
+        private async pickWzFilePaths(): Promise<string[]> {
+            if (window.mapleHost) {
+                return window.mapleHost.pickOpenWzFiles();
+            }
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseFiles, {});
+            if (!res.ok && !res.data?.cancelled) {
+                this.showToast(res.data?.error || 'Could not browse files', ToastKind.Error);
+            }
+            return res.ok ? res.data.filePaths || [] : [];
+        }
+
+        private async pickDirectoryPath(): Promise<string | null> {
+            if (window.mapleHost) {
+                return window.mapleHost.pickDirectory();
+            }
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseDirectory, {});
+            return res.ok && res.data?.path ? res.data.path : null;
+        }
+
+        private async pickSaveWzPath(defaultFileName: string): Promise<string | null> {
+            if (window.mapleHost) {
+                return window.mapleHost.pickSaveWzFile(defaultFileName);
+            }
+            const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseSaveFile, { defaultFileName });
+            return res.ok && res.data?.path ? res.data.path : null;
         }
 
         private openDirectoryModal(): void {
@@ -3128,18 +3151,8 @@ namespace MapleRepacker {
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
                 const directoryPath = (document.getElementById('modalDirPathInput') as HTMLInputElement).value.trim();
-                if (!directoryPath) return;
-                const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceOpenDirectory, { directoryPath });
-                if (res.ok) {
+                if (directoryPath && (await this.openDataDirectory(directoryPath))) {
                     this.closeModal();
-                    this.treeState.childrenByParent.clear();
-                    this.showToast(`Loaded WZ archives from ${directoryPath}`, ToastKind.Success);
-                    if (res.data.archiveId) {
-                        await this.fetchTreeChildren(res.data.archiveId, '');
-                        await this.selectAndInspectNode(res.data.archiveId, '', true);
-                    }
-                } else {
-                    this.showToast(res.data?.error || 'Failed to open directory', ToastKind.Error);
                 }
             });
         }
@@ -3232,7 +3245,7 @@ namespace MapleRepacker {
             const scopeLabel = this.selectedPath
                 ? `${currentAr.name} / ${this.selectedPath}`
                 : `${currentAr.name} (Entire Archive)`;
-            const browseBtnHtml = this.supportsNativeDialogs
+            const browseBtnHtml = this.hasNativeDialogs
                 ? `<button type="button" class="cmd-btn" id="btnModalBrowseExportDir" style="flex-shrink: 0;">Browse...</button>`
                 : '';
 
@@ -3276,9 +3289,9 @@ namespace MapleRepacker {
             const browseBtn = document.getElementById('btnModalBrowseExportDir');
             if (browseBtn) {
                 browseBtn.addEventListener('click', async () => {
-                    const res = await rpcCall<RpcOperationResponse>(RpcMethod.WorkspaceBrowseDirectory, {});
-                    if (res.ok && res.data?.path) {
-                        dirInput.value = res.data.path;
+                    const pickedDir = await this.pickDirectoryPath();
+                    if (pickedDir) {
+                        dirInput.value = pickedDir;
                     }
                 });
             }

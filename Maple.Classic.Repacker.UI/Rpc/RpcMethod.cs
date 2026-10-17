@@ -16,8 +16,6 @@ public enum RpcMethod {
     WorkspaceBrowseSaveFile,
     [EnumMember(Value = "workspace.browseDirectory")]
     WorkspaceBrowseDirectory,
-    [EnumMember(Value = "workspace.browseAndOpenDirectory")]
-    WorkspaceBrowseAndOpenDirectory,
     [EnumMember(Value = "workspace.openFile")]
     WorkspaceOpenFile,
     [EnumMember(Value = "workspace.openBytes")]

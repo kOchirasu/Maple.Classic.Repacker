@@ -88,13 +88,6 @@ public sealed class ArchiveSession : IDisposable {
         return [.. openedArchivePaths.OrderBy(static p => p, StringComparer.OrdinalIgnoreCase)];
     }
 
-    public bool HasLinkedFile(string filePath) {
-        if (string.IsNullOrWhiteSpace(filePath)) {
-            return false;
-        }
-        return openedArchivePaths.Contains(Path.GetFullPath(filePath));
-    }
-
     public bool HasLinkedOrSubdirectoryFile(string filePath) {
         if (string.IsNullOrWhiteSpace(filePath)) {
             return false;
@@ -626,22 +619,6 @@ public sealed class ArchiveSession : IDisposable {
             }
         }
         return false;
-    }
-
-    public bool IsPathModified(string path) {
-        string norm = NormalizePath(path);
-        if (string.IsNullOrEmpty(norm)) {
-            return !IsUserCreatedArchive && IsModified;
-        }
-        (string? imgPath, _) = SplitImageAndSubPath(norm);
-        if (imgPath is not null) {
-            return GetImageChangeState(imgPath) == RepackerChangeState.Modified;
-        }
-        VirtualFsNode? dirNode = ResolveVirtualNode(norm);
-        if (dirNode is null) {
-            return false;
-        }
-        return GetDirectoryChangeState(norm, dirNode) == RepackerChangeState.Modified;
     }
 
     public WzValue GetOrParseImage(string imagePath) {

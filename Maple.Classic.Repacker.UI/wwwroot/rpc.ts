@@ -37,7 +37,6 @@ namespace MapleRepacker {
     }
 
     export enum WzCanvasFormat {
-        Unknown = 'Unknown',
         Bgra4444 = 'Bgra4444',
         Bgra8888 = 'Bgra8888',
         Bgr565 = 'Bgr565',
@@ -139,7 +138,6 @@ namespace MapleRepacker {
         WorkspaceBrowseFiles = 'workspace.browseFiles',
         WorkspaceBrowseSaveFile = 'workspace.browseSaveFile',
         WorkspaceBrowseDirectory = 'workspace.browseDirectory',
-        WorkspaceBrowseAndOpenDirectory = 'workspace.browseAndOpenDirectory',
         WorkspaceOpenFile = 'workspace.openFile',
         WorkspaceOpenBytes = 'workspace.openBytes',
         WorkspaceOpenDirectory = 'workspace.openDirectory',
@@ -179,6 +177,69 @@ namespace MapleRepacker {
         RequestAppClose = 'requestAppClose',
         ConfirmAppClose = 'confirmAppClose',
     }
+
+    /**
+     * API exposed as `window.mapleHost` by the Electron preload script (electron/src/preload.ts).
+     * Messages use the same `HostWebMessageType` protocol as the WebView2 shell.
+     */
+    export interface ElectronHostApi {
+        readonly platform: string;
+        postMessage(message: unknown): void;
+        onMessage(listener: (message: unknown) => void): void;
+        pickOpenWzFiles(): Promise<string[]>;
+        pickDirectory(): Promise<string | null>;
+        pickSaveWzFile(defaultFileName: string): Promise<string | null>;
+    }
+
+    export enum DesktopHostKind {
+        Browser = 'browser',
+        WebView2 = 'webview2',
+        Electron = 'electron',
+    }
+
+    export interface HostWebMessage {
+        type: HostWebMessageType;
+        [key: string]: unknown;
+    }
+
+    /**
+     * Single entry point for talking to whichever desktop shell is hosting the page:
+     * the Windows WebView2 shell (`window.chrome.webview`), the Electron shell (`window.mapleHost`), or none (plain browser).
+     */
+    export const desktopHost = {
+        get kind(): DesktopHostKind {
+            if (window.chrome?.webview) return DesktopHostKind.WebView2;
+            if (window.mapleHost) return DesktopHostKind.Electron;
+            return DesktopHostKind.Browser;
+        },
+
+        get isDesktop(): boolean {
+            return this.kind !== DesktopHostKind.Browser;
+        },
+
+        postMessage(message: HostWebMessage): void {
+            if (window.chrome?.webview) {
+                window.chrome.webview.postMessage(JSON.stringify(message));
+            } else {
+                window.mapleHost?.postMessage(message);
+            }
+        },
+
+        onMessage(listener: (message: HostWebMessage) => void): void {
+            const dispatch = (raw: unknown): void => {
+                try {
+                    const data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                    if (data && typeof data.type === 'string') {
+                        listener(data as HostWebMessage);
+                    }
+                } catch {
+                    // Ignore malformed host messages
+                }
+            };
+            window.chrome?.webview?.addEventListener('message', (ev: MessageEvent) => dispatch(ev.data));
+            window.mapleHost?.onMessage(dispatch);
+        },
+    };
 
     export interface RepackerLogEntry {
         id: number;

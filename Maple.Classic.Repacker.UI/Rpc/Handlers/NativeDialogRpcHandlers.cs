@@ -3,14 +3,14 @@ using Maple.Classic.Repacker.Engine.Models;
 namespace Maple.Classic.Repacker.UI.Rpc.Handlers;
 
 /// <summary>
-/// Native Windows file/folder pickers. On non-Windows builds these return a "not supported" error.
+/// Native Windows file/folder pickers used by the WebView2 shell. The Electron shell shows its own dialogs instead,
+/// so on non-Windows builds these return a "not supported" error.
 /// </summary>
 internal static class NativeDialogRpcHandlers {
     public static void Register(RpcRouter router) {
         router.Map(RpcMethod.WorkspaceBrowseFiles, WorkspaceBrowseFiles);
         router.Map(RpcMethod.WorkspaceBrowseSaveFile, WorkspaceBrowseSaveFile);
         router.Map(RpcMethod.WorkspaceBrowseDirectory, WorkspaceBrowseDirectory);
-        router.Map(RpcMethod.WorkspaceBrowseAndOpenDirectory, WorkspaceBrowseAndOpenDirectory);
     }
 
     private static (bool Ok, object? Data) WorkspaceBrowseFiles(RpcContext ctx, ReadOnlyMemory<byte> _) {
@@ -56,29 +56,6 @@ internal static class NativeDialogRpcHandlers {
         return (true, new RpcOperationResponse(
             Ok: true,
             Path: directoryPath));
-#else
-        return (false, new RpcOperationResponse(false, "Native folder dialog is not supported on this platform."));
-#endif
-    }
-
-    private static (bool Ok, object? Data) WorkspaceBrowseAndOpenDirectory(RpcContext ctx, ReadOnlyMemory<byte> _) {
-#if WINDOWS
-        string? initialDir = ctx.Settings.GetRecentPaths().FirstOrDefault();
-        string? directoryPath = WindowsDesktopShell.PickOpenDirectory(initialDir);
-        if (string.IsNullOrWhiteSpace(directoryPath)) {
-            return (true, new RpcOperationResponse(Ok: true, Cancelled: true));
-        }
-        ArchiveSummaryDto[] opened = ctx.Workspace.OpenDataDirectory(directoryPath);
-        if (opened.Length > 0) {
-            ctx.Settings.RecordRecentPath(Path.GetFullPath(directoryPath));
-        }
-        return (opened.Length > 0, new RpcOperationResponse(
-            Ok: opened.Length > 0,
-            Error: opened.Length == 0 ? "No readable .wz files found in the selected directory." : null,
-            ArchiveId: ctx.Workspace.SelectedArchiveId,
-            Path: ctx.Workspace.SelectedNodePath,
-            Archives: opened,
-            Status: ctx.BuildStatus()));
 #else
         return (false, new RpcOperationResponse(false, "Native folder dialog is not supported on this platform."));
 #endif

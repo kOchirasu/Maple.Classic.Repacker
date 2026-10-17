@@ -1,35 +1,60 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
+    <!--
+        Two builds of the same backend:
+          net10.0-windows : WinExe with the native Windows Forms + WebView2 desktop shell (WindowsDesktopShell.cs).
+          net10.0         : cross-platform headless backend, hosted by the Electron shell (electron/) on Linux/macOS
+                            or opened directly in a browser in headless mode.
+        The WINDOWS symbol is only defined for net10.0-windows, so #if WINDOWS code is excluded elsewhere.
+    -->
     <PropertyGroup>
-        <TargetFramework>net10.0-windows</TargetFramework>
+        <TargetFrameworks>net10.0;net10.0-windows</TargetFrameworks>
         <EnableWindowsTargeting>true</EnableWindowsTargeting>
         <Nullable>enable</Nullable>
         <ImplicitUsings>enable</ImplicitUsings>
         <IsTransformWebConfigDisabled>true</IsTransformWebConfigDisabled>
         <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+        <OutputType>Exe</OutputType>
+        <SelfContained>false</SelfContained>
+        <DebugType Condition="$(Configuration.StartsWith('Release'))">none</DebugType>
+        <DebugSymbols Condition="$(Configuration.StartsWith('Release'))">false</DebugSymbols>
+        <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
+        <TypeScriptCompileBlocked>true</TypeScriptCompileBlocked>
+        <FrontendOutDir>$(MSBuildProjectDirectory)/obj/ts/</FrontendOutDir>
+    </PropertyGroup>
+
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
         <OutputType>WinExe</OutputType>
         <ApplicationManifest>app.manifest</ApplicationManifest>
         <RuntimeIdentifier>win-x64</RuntimeIdentifier>
         <UseWindowsForms>true</UseWindowsForms>
         <WebView2NeverCopyLoaderDllToOutputDirectory>true</WebView2NeverCopyLoaderDllToOutputDirectory>
         <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
-        <SelfContained>false</SelfContained>
         <PublishSingleFile>true</PublishSingleFile>
-        <DebugType Condition="$(Configuration.StartsWith('Release'))">none</DebugType>
-        <DebugSymbols Condition="$(Configuration.StartsWith('Release'))">false</DebugSymbols>
-        <AllowedReferenceRelatedFileExtensions>none</AllowedReferenceRelatedFileExtensions>
-        <TypeScriptCompileBlocked>true</TypeScriptCompileBlocked>
+    </PropertyGroup>
+
+    <!-- Cross-platform publishes (e.g. -r linux-x64 / osx-arm64 for the Electron bundle) are single-file when a RID is given. -->
+    <PropertyGroup Condition="'$(TargetFramework)' == 'net10.0' and '$(RuntimeIdentifier)' != ''">
+        <PublishSingleFile>true</PublishSingleFile>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="MessagePack" Version="3.1.12" />
-        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" GeneratePathProperty="true" />
-        <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
-        <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
         <PackageReference Include="Microsoft.TypeScript.MSBuild" Version="7.0.1" PrivateAssets="all" GeneratePathProperty="true" />
     </ItemGroup>
 
-    <Target Name="ConfigureWebView2ForCostura" BeforeTargets="ResolveAssemblyReferences;FodyTarget">
+    <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows'">
+        <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4258.31" GeneratePathProperty="true" />
+        <PackageReference Include="Fody" Version="6.9.3" PrivateAssets="all" />
+        <PackageReference Include="Costura.Fody" Version="6.2.0" PrivateAssets="all" />
+    </ItemGroup>
+
+    <ItemGroup Condition="'$(TargetFramework)' != 'net10.0-windows'">
+        <Compile Remove="WindowsDesktopShell.cs" />
+        <None Include="WindowsDesktopShell.cs" />
+    </ItemGroup>
+
+    <Target Name="ConfigureWebView2ForCostura" BeforeTargets="ResolveAssemblyReferences;FodyTarget" Condition="'$(TargetFramework)' == 'net10.0-windows'">
         <ItemGroup>
             <Reference Remove="@(Reference)" Condition="'%(Filename)' == 'Microsoft.Web.WebView2.Wpf'" />
             <ReferenceCopyLocalPaths Include="$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll" Condition="Exists('$(PkgMicrosoft_Web_WebView2)\runtimes\win-x64\native\WebView2Loader.dll')">
@@ -96,12 +121,30 @@
         </PropertyGroup>
     </Target>
 
-    <Target Name="CompileTypeScriptCrossPlatform" DependsOnTargets="ResolveNodeExecutable" BeforeTargets="SplitResourcesByCulture;CoreCompile">
-        <Exec Condition="!Exists('$(MSBuildProjectDirectory)/node_modules/@codemirror/view') or !Exists('$(MSBuildProjectDirectory)/node_modules/@msgpack/msgpack') or ('$(OS)' == 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/win32-x64')) or ('$(OS)' != 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/linux-x64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-arm64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-x64'))" Command="$(NpmCmd) install --no-audit --no-fund" WorkingDirectory="$(MSBuildProjectDirectory)" />
+    <!--
+        Frontend build (npm install, CodeMirror/msgpack vendor bundles, tsc) writes to obj/ts/ and is shared by both
+        target frameworks. It is incremental, and the multi-target outer build runs it once up front, so the parallel
+        per-framework inner builds see up-to-date outputs and skip it instead of racing on the same files.
+    -->
+    <ItemGroup>
+        <FrontendInput Include="wwwroot/**/*.ts;scripts/**/*;package.json;tsconfig.json" />
+        <FrontendOutput Include="$(FrontendOutDir)wwwroot/app.js;$(FrontendOutDir)wwwroot/rpc.js;$(FrontendOutDir)wwwroot/layout.js;$(FrontendOutDir)wwwroot/vendor/codemirror/cm6.bundle.js;$(FrontendOutDir)wwwroot/vendor/msgpack/msgpack.min.js" />
+    </ItemGroup>
+
+    <Target Name="BuildFrontend" DependsOnTargets="ResolveNodeExecutable" Inputs="@(FrontendInput)" Outputs="@(FrontendOutput)">
+        <Exec Condition="!Exists('$(MSBuildProjectDirectory)/node_modules/@codemirror/view') or !Exists('$(MSBuildProjectDirectory)/node_modules/@codemirror/lang-json') or !Exists('$(MSBuildProjectDirectory)/node_modules/typescript/lib/tsc.js') or !Exists('$(MSBuildProjectDirectory)/node_modules/@msgpack/msgpack') or ('$(OS)' == 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/win32-x64')) or ('$(OS)' != 'Windows_NT' and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/linux-x64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-arm64') and !Exists('$(MSBuildProjectDirectory)/node_modules/@esbuild/darwin-x64'))" Command="$(NpmCmd) install --no-audit --no-fund" WorkingDirectory="$(MSBuildProjectDirectory)" />
         <Exec Command="&quot;$(NodeExe)&quot; &quot;$(MSBuildProjectDirectory)/scripts/build-vendor.mjs&quot;" WorkingDirectory="$(MSBuildProjectDirectory)" />
-        <Exec Condition="'$(OS)' != 'Windows_NT' AND '$(TscExe)' != '' AND Exists('$(TscExe)')" Command="chmod +x &quot;$(TscExe)&quot;" />
-        <Exec Condition="'$(TscExe)' != '' AND Exists('$(TscExe)')" Command="&quot;$(TscExe)&quot; -p &quot;$(MSBuildProjectDirectory)/tsconfig.json&quot;" />
-        <Exec Condition="('$(TscExe)' == '' OR !Exists('$(TscExe)')) AND Exists('$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js')" Command="&quot;$(NodeExe)&quot; &quot;$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js&quot; -p &quot;$(MSBuildProjectDirectory)/tsconfig.json&quot;" />
+        <PropertyGroup>
+            <TscJs Condition="Exists('$(MSBuildProjectDirectory)/node_modules/typescript/lib/tsc.js')">$(MSBuildProjectDirectory)/node_modules/typescript/lib/tsc.js</TscJs>
+            <TscJs Condition="'$(TscJs)' == '' and Exists('$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js')">$(PkgMicrosoft_TypeScript_MSBuild)/tools/tsc/tsc.js</TscJs>
+        </PropertyGroup>
+        <Error Condition="'$(TscJs)' == ''" Text="TypeScript compiler not found. Run 'npm install' in $(MSBuildProjectDirectory)." />
+        <Exec Command="&quot;$(NodeExe)&quot; &quot;$(TscJs)&quot; -p &quot;$(MSBuildProjectDirectory)/tsconfig.json&quot;" />
+    </Target>
+
+    <Target Name="BuildFrontendBeforeInnerBuilds" BeforeTargets="DispatchToInnerBuilds" DependsOnTargets="BuildFrontend" />
+
+    <Target Name="EmbedFrontend" DependsOnTargets="BuildFrontend" BeforeTargets="SplitResourcesByCulture;CoreCompile">
         <ItemGroup>
             <EmbeddedResource Include="obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js" LogicalName="wwwroot/vendor/codemirror/cm6.bundle.js" Condition="Exists('obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js')" />
             <EmbeddedResource Include="obj/ts/wwwroot/vendor/msgpack/msgpack.min.js" LogicalName="wwwroot/vendor/msgpack/msgpack.min.js" Condition="Exists('obj/ts/wwwroot/vendor/msgpack/msgpack.min.js')" />

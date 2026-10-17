@@ -58,10 +58,6 @@ namespace MapleRepacker {
             return this.inspectorCollapsed;
         }
 
-        public isInspectorCollapsed(): boolean {
-            return this.inspectorCollapsed;
-        }
-
         public toggleWorkbench(forceCollapsed?: boolean): boolean {
             this.workbenchCollapsed = typeof forceCollapsed === 'boolean' ? forceCollapsed : !this.workbenchCollapsed;
             this.applySizes();

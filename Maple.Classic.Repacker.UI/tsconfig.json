@@ -15,7 +15,6 @@
   "files": [
     "wwwroot/rpc.ts",
     "wwwroot/layout.ts",
-    "wwwroot/app.ts",
-    "electron/main.ts"
+    "wwwroot/app.ts"
   ]
 }

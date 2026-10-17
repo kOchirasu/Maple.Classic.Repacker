@@ -439,19 +439,6 @@ public sealed class RepackerWorkspace : IDisposable {
         return true;
     }
 
-    public void CloseAllArchives() {
-        lock (syncLock) {
-            foreach (ArchiveSession s in archives) {
-                s.Dispose();
-            }
-            archives.Clear();
-            SelectedArchiveId = null;
-            SelectedNodePath = string.Empty;
-            AppendLogUnsafe("Closed all archives.", RepackerLogLevel.Info);
-        }
-        NotifyStateChanged();
-    }
-
     // -------------------------------------------------------------------------
     // Tree Expansion & Node Inspection
     // -------------------------------------------------------------------------
