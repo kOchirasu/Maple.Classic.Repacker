@@ -191,18 +191,17 @@ public sealed class RepackerEngineTests {
         Assert.Contains(coatChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
 
         // 2. Inspect Canvas node with _outlink resolution across Character_Canvas_000.wz
-        NodeInspectionDto outlinkNode = workspace.InspectNode(charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
-        Assert.True(outlinkNode.Ok, outlinkNode.Error);
+        NodeInspectionDto outlinkNode = Inspect(workspace, charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
         Assert.Equal(RepackerPropertyKind.Canvas, outlinkNode.PropertyKind);
-        Assert.NotNull(outlinkNode.Canvas);
-        Assert.NotNull(outlinkNode.Canvas.Outlink);
-        Assert.Contains("Character_Canvas_000.wz", outlinkNode.Canvas.ResolvedLinkPath);
-        Assert.NotEmpty(outlinkNode.Canvas.PngBytes);
+        Assert.NotNull(outlinkNode.Preview.Canvas);
+        Assert.NotNull(outlinkNode.Preview.Canvas.Outlink);
+        Assert.Contains("Character_Canvas_000.wz", outlinkNode.Preview.Canvas.ResolvedLinkPath);
+        Assert.NotEmpty(outlinkNode.Preview.Canvas.PngBytes);
 
         // 3. Inspect animation node (stand1)
-        NodeInspectionDto stand1Node = workspace.InspectNode(charArchiveId, "Coat/01040000.img/stand1");
-        Assert.NotEmpty(stand1Node.AnimationFrames);
-        Assert.Equal(3, stand1Node.AnimationFrames.Length);
+        NodeInspectionDto stand1Node = Inspect(workspace, charArchiveId, "Coat/01040000.img/stand1");
+        Assert.NotEmpty(stand1Node.Preview.AnimationFrames);
+        Assert.Equal(3, stand1Node.Preview.AnimationFrames.Length);
 
         // 4. Inline external _outlink pixel data into PetEquip/01802653.img/5002828/stand0/0
         (string? inlineErr, int inlinedCount) = workspace.InlineOutlinks(
@@ -211,11 +210,11 @@ public sealed class RepackerEngineTests {
         Assert.Null(inlineErr);
         Assert.Equal(1, inlinedCount);
 
-        NodeInspectionDto afterInline = workspace.InspectNode(charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
-        Assert.NotNull(afterInline.Canvas);
-        Assert.Null(afterInline.Canvas.Outlink);
-        Assert.Equal(36, afterInline.Canvas.Width);
-        Assert.Equal(36, afterInline.Canvas.Height);
+        NodeInspectionDto afterInline = Inspect(workspace, charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
+        Assert.NotNull(afterInline.Preview.Canvas);
+        Assert.Null(afterInline.Preview.Canvas.Outlink);
+        Assert.Equal(36, afterInline.Preview.Canvas.Width);
+        Assert.Equal(36, afterInline.Preview.Canvas.Height);
 
         // 5. Update primitive property & verify Undo / Redo
         string? updateErr = workspace.SetPropertyValue(
@@ -227,20 +226,20 @@ public sealed class RepackerEngineTests {
             null);
         Assert.Null(updateErr);
 
-        NodeInspectionDto updatedLevel = workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel");
+        NodeInspectionDto updatedLevel = Inspect(workspace, charArchiveId, "Coat/01040000.img/info/reqLevel");
         Assert.Equal("25", updatedLevel.DisplayValue);
-        Assert.True(updatedLevel.CanUndo);
+        Assert.True(Archive(workspace, charArchiveId).CanUndo);
         Assert.Equal(0, updatedLevel.ChildCount);
         Assert.Contains(updatedLevel.Children, c => c.Name == "islot" && c.Path == "Coat/01040000.img/info/islot");
         Assert.Contains(updatedLevel.Children, c => c.Name == "reqLevel" && c.Path == "Coat/01040000.img/info/reqLevel");
 
         (string? undoErr, _) = workspace.Undo(charArchiveId);
         Assert.Null(undoErr);
-        Assert.Equal("10", workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
+        Assert.Equal("10", Inspect(workspace, charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
 
         (string? redoErr, _) = workspace.Redo(charArchiveId);
         Assert.Null(redoErr);
-        Assert.Equal("25", workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
+        Assert.Equal("25", Inspect(workspace, charArchiveId, "Coat/01040000.img/info/reqLevel").DisplayValue);
 
         // 6. Add, rename, duplicate, copy/paste, and delete property
         (string? addErr, string addedPath) = workspace.AddProperty(
@@ -283,8 +282,7 @@ public sealed class RepackerEngineTests {
         TreeNodeDto deletedTreeEntry = Assert.Single(infoAfterDel, n => n.Path == pastedPath);
         Assert.Equal(RepackerChangeState.Deleted, deletedTreeEntry.ChangeState);
 
-        NodeInspectionDto deletedInspect = workspace.InspectNode(charArchiveId, pastedPath);
-        Assert.True(deletedInspect.Ok, deletedInspect.Error);
+        NodeInspectionDto deletedInspect = Inspect(workspace, charArchiveId, pastedPath);
         Assert.Equal(RepackerChangeState.Deleted, deletedInspect.ChangeState);
         Assert.Contains(deletedInspect.Children, c => c.Path == pastedPath && c.ChangeState == RepackerChangeState.Deleted);
 
@@ -303,32 +301,30 @@ public sealed class RepackerEngineTests {
         (string? delImgErr, _) = workspace.DeleteNode(charArchiveId, "Coat/01040000.img");
         Assert.Null(delImgErr);
 
-        NodeInspectionDto deletedImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
-        Assert.True(deletedImgInspect.Ok, deletedImgInspect.Error);
+        NodeInspectionDto deletedImgInspect = Inspect(workspace, charArchiveId, "Coat/01040000.img");
         Assert.Equal(RepackerChangeState.Deleted, deletedImgInspect.ChangeState);
-        Assert.True(deletedImgInspect.CanUndo);
+        Assert.True(Archive(workspace, charArchiveId).CanUndo);
 
         // Switching to another node or archive root keeps Undo available in the archive undo queue
-        NodeInspectionDto otherNodeInspect = workspace.InspectNode(charArchiveId, "PetEquip/01802653.img");
-        Assert.True(otherNodeInspect.CanUndo);
-        NodeInspectionDto rootInspect = workspace.InspectNode(charArchiveId, "");
-        Assert.True(rootInspect.CanUndo);
+        NodeInspectionDto otherNodeInspect = Inspect(workspace, charArchiveId, "PetEquip/01802653.img");
+        Assert.True(Archive(workspace, charArchiveId).CanUndo);
+        NodeInspectionDto rootInspect = Inspect(workspace, charArchiveId, "");
+        Assert.True(Archive(workspace, charArchiveId).CanUndo);
 
         (string? undoImgErr, _) = workspace.Undo(charArchiveId);
         Assert.Null(undoImgErr);
 
-        NodeInspectionDto restoredImgInspect = workspace.InspectNode(charArchiveId, "Coat/01040000.img");
-        Assert.True(restoredImgInspect.Ok, restoredImgInspect.Error);
+        NodeInspectionDto restoredImgInspect = Inspect(workspace, charArchiveId, "Coat/01040000.img");
         Assert.NotEqual(RepackerChangeState.Deleted, restoredImgInspect.ChangeState);
-        Assert.True(restoredImgInspect.CanRedo);
+        Assert.True(Archive(workspace, charArchiveId).CanRedo);
 
         (string? redoImgErr, _) = workspace.Redo(charArchiveId);
         Assert.Null(redoImgErr);
-        Assert.Equal(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
+        Assert.Equal(RepackerChangeState.Deleted, Inspect(workspace, charArchiveId, "Coat/01040000.img").ChangeState);
 
         (string? undoImgAgainErr, _) = workspace.Undo(charArchiveId);
         Assert.Null(undoImgAgainErr);
-        Assert.NotEqual(RepackerChangeState.Deleted, workspace.InspectNode(charArchiveId, "Coat/01040000.img").ChangeState);
+        Assert.NotEqual(RepackerChangeState.Deleted, Inspect(workspace, charArchiveId, "Coat/01040000.img").ChangeState);
 
         // 7. Global search across archives
         SearchResultItemDto[] hits = workspace.Search(new SearchQueryDto {
@@ -360,26 +356,77 @@ public sealed class RepackerEngineTests {
         string archiveId = workspace.OpenArchiveFromBytes("Character_000.wz", archiveBytes).ArchiveId;
         const string reqLevel = "Coat/01040000.img/info/reqLevel";
 
-        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+        Assert.False(Archive(workspace, archiveId).CanUndo);
 
         // Restoring a property that was never deleted fails and must not record an undo step
         (string? restoreErr, _) = workspace.RestoreNode(archiveId, reqLevel);
         Assert.NotNull(restoreErr);
-        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+        Assert.False(Archive(workspace, archiveId).CanUndo);
 
         // Wrong-type edits are rejected before anything is captured
         Assert.NotNull(workspace.ReplaceCanvasPng(archiveId, reqLevel, []));
         Assert.NotNull(workspace.ApplyJsonSubtree(archiveId, reqLevel, "{ not json"));
-        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
-        Assert.Equal(RepackerChangeState.Unchanged, workspace.InspectNode(archiveId, reqLevel).ChangeState);
+        Assert.False(Archive(workspace, archiveId).CanUndo);
+        Assert.Equal(RepackerChangeState.Unchanged, Inspect(workspace, archiveId, reqLevel).ChangeState);
 
         // A successful edit records exactly one step, and undo returns the node it touched
         Assert.Null(workspace.SetPropertyValue(archiveId, reqLevel, RepackerPropertyKind.Short, "25", null, null));
         (string? undoErr, string affected) = workspace.Undo(archiveId);
         Assert.Null(undoErr);
         Assert.Equal("Coat/01040000.img", affected);
-        Assert.Equal("10", workspace.InspectNode(archiveId, reqLevel).DisplayValue);
-        Assert.False(workspace.InspectNode(archiveId, reqLevel).CanUndo);
+        Assert.Equal("10", Inspect(workspace, archiveId, reqLevel).DisplayValue);
+        Assert.False(Archive(workspace, archiveId).CanUndo);
+    }
+
+    [Fact]
+    public void AddingNodes_ImportsFromFiles() {
+        using var workspace = new RepackerWorkspace();
+        byte[] archiveBytes;
+        using (var wz = new WzArchive()) {
+            var img = new WzValue.Object();
+            img["info/islot"] = "Ma";
+            wz.SetImage("Coat/01040000.img", img);
+            archiveBytes = wz.ToBytes();
+        }
+        string archiveId = workspace.OpenArchiveFromBytes("Character_000.wz", archiveBytes).ArchiveId;
+
+        // Canvas from a PNG in a chosen pixel format; no origin given -> bottom-center default
+        byte[] png = PngCodec.EncodeRgba(10, 6, new byte[10 * 6 * 4]);
+        (string? canvasErr, string canvasPath) = workspace.AddProperty(
+            archiveId, "Coat/01040000.img", "icon", RepackerPropertyKind.Canvas, binaryPayload: png, canvasFormat: WzCanvasFormat.Bgra4444);
+        Assert.Null(canvasErr);
+        CanvasPreviewDto canvas = Assert.IsType<CanvasPreviewDto>(Inspect(workspace, archiveId, canvasPath).Preview.Canvas);
+        Assert.Equal((10, 6, WzCanvasFormat.Bgra4444), (canvas.Width, canvas.Height, canvas.Format));
+        Assert.Equal(new VectorPointDto(5, 6), canvas.Origin);
+
+        // Sound from a WAV file
+        byte[] wav = new byte[44 + 100];
+        "RIFF"u8.CopyTo(wav);
+        "WAVEfmt "u8.CopyTo(wav.AsSpan(8));
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(20), 1);     // PCM
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(wav.AsSpan(22), 1);     // mono
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(24), 8000);   // sample rate
+        System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(wav.AsSpan(28), 16000);  // byte rate
+        (string? soundErr, string soundPath) = workspace.AddProperty(
+            archiveId, "Coat/01040000.img", "use", RepackerPropertyKind.Sound, binaryPayload: wav);
+        Assert.Null(soundErr);
+        Assert.NotNull(Inspect(workspace, archiveId, soundPath).Preview.Sound);
+
+        // .img from raw image bytes, and from an exported JSON subtree
+        var sourceImg = new WzValue.Object();
+        sourceImg["info/reqLevel"] = new WzValue.Short(30);
+        (string? rawErr, string rawPath) = workspace.AddImage(archiveId, "Coat", "01040002.img", rawImgBytes: sourceImg.ToBytes());
+        Assert.Null(rawErr);
+        Assert.Equal("30", Inspect(workspace, archiveId, $"{rawPath}/info/reqLevel").DisplayValue);
+
+        (string? jsonErr, string jsonPath) = workspace.AddImage(archiveId, "Coat", "01040003", jsonContent: sourceImg.ToJson());
+        Assert.Null(jsonErr);
+        Assert.Equal("Coat/01040003.img", jsonPath);
+        Assert.Equal("30", Inspect(workspace, archiveId, $"{jsonPath}/info/reqLevel").DisplayValue);
+
+        // A corrupt file is reported as an error instead of throwing
+        (string? badErr, _) = workspace.AddImage(archiveId, "Coat", "broken.img", jsonContent: "{ not json");
+        Assert.NotNull(badErr);
     }
 
     [Fact]
@@ -490,12 +537,11 @@ public sealed class RepackerEngineTests {
                 Assert.Contains(canvasChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
 
                 // Verify _outlink inside Coat/01040000.img resolves to Coat/_Canvas/01040000.img
-                NodeInspectionDto mailInspect = ws.InspectNode(charSummary.ArchiveId, "Coat/01040000.img/stand1/0/mail");
-                Assert.True(mailInspect.Ok, mailInspect.Error);
-                Assert.NotNull(mailInspect.Canvas);
-                Assert.Equal(24, mailInspect.Canvas.Width);
-                Assert.Equal(20, mailInspect.Canvas.Height);
-                Assert.Contains("Coat/_Canvas/01040000.img/stand1/0/mail", mailInspect.Canvas.ResolvedLinkPath);
+                NodeInspectionDto mailInspect = Inspect(ws, charSummary.ArchiveId, "Coat/01040000.img/stand1/0/mail");
+                Assert.NotNull(mailInspect.Preview.Canvas);
+                Assert.Equal(24, mailInspect.Preview.Canvas.Width);
+                Assert.Equal(20, mailInspect.Preview.Canvas.Height);
+                Assert.Contains("Coat/_Canvas/01040000.img/stand1/0/mail", mailInspect.Preview.Canvas.ResolvedLinkPath);
             }
 
             // Test B: Opening 63-byte String.wz directly auto-links String_000.wz
@@ -504,7 +550,7 @@ public sealed class RepackerEngineTests {
                 Assert.Equal(1, strSummary.ImageCount);
                 TreeNodeDto[] strChildren = ws.GetTreeChildren(strSummary.ArchiveId, "");
                 Assert.Contains(strChildren, n => n.Name == "Eqp.img");
-                NodeInspectionDto nameNode = ws.InspectNode(strSummary.ArchiveId, "Eqp.img/Eqp/Coat/1040000/name");
+                NodeInspectionDto nameNode = Inspect(ws, strSummary.ArchiveId, "Eqp.img/Eqp/Coat/1040000/name");
                 Assert.Equal("White Undershirt", nameNode.DisplayValue);
             }
 
@@ -518,8 +564,7 @@ public sealed class RepackerEngineTests {
                 TreeNodeDto[] baseCharChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "Character");
                 Assert.Contains(baseCharChildren, n => n.Name == "Coat" && n.ChildCount > 0);
 
-                NodeInspectionDto eqpInspect = ws.InspectNode(baseSummary.ArchiveId, "String/Eqp.img/Eqp/Coat/1040000/name");
-                Assert.True(eqpInspect.Ok, eqpInspect.Error);
+                NodeInspectionDto eqpInspect = Inspect(ws, baseSummary.ArchiveId, "String/Eqp.img/Eqp/Coat/1040000/name");
                 Assert.Equal("White Undershirt", eqpInspect.DisplayValue);
             }
 
@@ -591,6 +636,15 @@ public sealed class RepackerEngineTests {
             }
         }
     }
+
+    private static NodeInspectionDto Inspect(RepackerWorkspace workspace, string archiveId, string path) {
+        (string? error, NodeInspectionDto? inspection) = workspace.InspectNode(archiveId, path);
+        Assert.Null(error);
+        return Assert.IsType<NodeInspectionDto>(inspection);
+    }
+
+    private static ArchiveSummaryDto Archive(RepackerWorkspace workspace, string archiveId) =>
+        Assert.Single(workspace.GetArchiveSummaries(), a => a.ArchiveId == archiveId);
 
     private static byte[] BuildDirectoryOnlyWzArchive(IReadOnlyList<string> dirNames, ushort version = 779) {
         const uint fstart = 0x3C;

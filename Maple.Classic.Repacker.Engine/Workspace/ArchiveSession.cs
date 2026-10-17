@@ -427,18 +427,7 @@ public sealed class ArchiveSession : IDisposable {
     }
 
     public ArchiveSummaryDto ToSummaryDto() {
-        (int dirs, int imgs) = CountVirtualRecursive(VirtualRoot);
-        long fileSize = 0;
-        if (!string.IsNullOrEmpty(FilePath) && System.IO.File.Exists(FilePath)) {
-            try {
-                fileSize = new FileInfo(FilePath).Length;
-            } catch {
-                // Fall back to header size
-            }
-        }
-        if (fileSize == 0) {
-            fileSize = (long) Archive.Header.FSize + Archive.Header.FStart;
-        }
+        (_, int imgs) = CountVirtualRecursive(VirtualRoot);
 
         RepackerChangeState archiveChangeState = IsUserCreatedArchive
             ? RepackerChangeState.Added
@@ -451,15 +440,12 @@ public sealed class ArchiveSession : IDisposable {
             Name,
             FilePath,
             Archive.Version,
-            Archive.Header.EncVer,
-            Archive.Header.FStart,
-            Archive.Header.Copyright,
-            fileSize,
-            dirs,
             imgs,
             modifiedImages.Count,
             archiveChangeState,
-            GetLinkedFilePaths());
+            GetLinkedFilePaths(),
+            CanUndo,
+            CanRedo);
     }
 
     public static (int Directories, int Images) CountVirtualRecursive(VirtualFsNode root) {

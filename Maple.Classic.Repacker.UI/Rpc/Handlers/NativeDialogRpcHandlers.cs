@@ -24,10 +24,7 @@ internal static class NativeDialogRpcHandlers {
 
     private static RpcOperationResponse BrowseSaveFile(RpcContext ctx, BrowseSaveFileRequest req) {
 #if WINDOWS
-        string? initialDir = !string.IsNullOrWhiteSpace(req.InitialDirectory)
-            ? req.InitialDirectory
-            : ctx.Settings.GetRecentPaths().FirstOrDefault();
-        string? savedPath = WindowsDesktopShell.PickSaveWzFile(req.DefaultFileName, initialDir);
+        string? savedPath = WindowsDesktopShell.PickSaveWzFile(req.DefaultFileName, ctx.Settings.GetRecentPaths().FirstOrDefault());
         return string.IsNullOrWhiteSpace(savedPath) ? Cancelled : new RpcOperationResponse(Ok: true, Path: savedPath);
 #else
         return RpcContext.Fail("Native save dialog is not supported on this platform.");

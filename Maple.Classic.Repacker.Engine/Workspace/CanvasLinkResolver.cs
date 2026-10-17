@@ -18,7 +18,6 @@ internal static class CanvasLinkResolver {
         WzValue.Canvas canvas) {
         string? inlink = canvas["_inlink"]?.AsString();
         string? outlink = canvas["_outlink"]?.AsString();
-        string? zLayer = canvas["z"]?.AsString() ?? (canvas["z"]?.AsInt() is { } zi ? zi.ToString(CultureInfo.InvariantCulture) : null);
         int delayMs = canvas["delay"]?.AsInt() ?? 100;
         VectorPointDto origin = canvas["origin"] is WzValue.Vector(var ox, var oy) ? new VectorPointDto(ox, oy) : new VectorPointDto(0, 0);
         VectorPointDto? lt = canvas["lt"] is WzValue.Vector(var ltx, var lty) ? new VectorPointDto(ltx, lty) : null;
@@ -27,7 +26,6 @@ internal static class CanvasLinkResolver {
 
         WzValue.Canvas visualCanvas = canvas;
         string? resolvedLinkPath = null;
-        bool isLinkStub = (!string.IsNullOrEmpty(inlink) || !string.IsNullOrEmpty(outlink)) && canvas.Width <= 1 && canvas.Height <= 1;
 
         if (!string.IsNullOrEmpty(inlink)) {
             if (ResolvePropertyNode(imgRoot, inlink) is WzValue.Canvas inCanvas) {
@@ -49,18 +47,15 @@ internal static class CanvasLinkResolver {
             visualCanvas.Height,
             canvasFormat,
             canvasFormat.GetDisplayName(),
-            visualCanvas.Payload.Length,
             pngBytes,
             origin,
             lt,
             rb,
             head,
             delayMs,
-            zLayer,
             inlink,
             outlink,
-            resolvedLinkPath,
-            isLinkStub);
+            resolvedLinkPath);
     }
 
     internal static (WzValue.Canvas? Canvas, string? ResolvedDesc) ResolveOutlinkCanvas(
@@ -217,7 +212,6 @@ internal static class CanvasLinkResolver {
             int a1 = frameCanvas["a1"]?.AsInt() ?? 255;
 
             frames.Add(new AnimationFrameDto(
-                idx,
                 prop.Name,
                 $"{imgPath}/{frameSubPath}",
                 preview.Width,

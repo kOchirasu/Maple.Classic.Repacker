@@ -156,7 +156,7 @@ internal static class NodeDtoBuilder {
             c.ChangeState);
 
     // -------------------------------------------------------------------------
-    // Change state & errors
+    // Change state
     // -------------------------------------------------------------------------
 
     internal static RepackerChangeState EvaluatePropertyChangeState(
@@ -186,35 +186,6 @@ internal static class NodeDtoBuilder {
         }
         return !propVal.Equals(origProp) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
     }
-
-    internal static NodeInspectionDto ErrorInspection(string archiveId, string path, string error) =>
-        new(
-            false,
-            error,
-            archiveId,
-            string.Empty,
-            path,
-            string.Empty,
-            null,
-            RepackerNodeKind.Property,
-            RepackerPropertyKind.None,
-            string.Empty,
-            null,
-            null,
-            null,
-            null,
-            0,
-            0,
-            RepackerChangeState.Unchanged,
-            false,
-            false,
-            "{}",
-            [],
-            null,
-            [],
-            null,
-            null,
-            []);
 
     private static string JoinSubPath(string parent, string child) =>
         string.IsNullOrEmpty(parent) ? child : $"{parent}/{child}";

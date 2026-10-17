@@ -94,7 +94,7 @@ internal static class NodeEditRpcHandlers {
 
     private static RpcOperationResponse Paste(RpcContext ctx, PasteNodeRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
-        (string? error, string pastedPath) = ctx.Workspace.PasteNode(archiveId, ctx.ResolvePath(req.TargetPath), req.OverrideName);
+        (string? error, string pastedPath) = ctx.Workspace.PasteNode(archiveId, ctx.ResolvePath(req.TargetPath));
         return ctx.Result(error, archiveId, pastedPath);
     }
 

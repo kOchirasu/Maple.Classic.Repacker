@@ -10,7 +10,6 @@ namespace Maple.Classic.Repacker.UI.Rpc;
 /// </summary>
 public sealed record WorkspaceStatusPayloadDto(
     string Type,
-    long StateVersion,
     string? SelectedArchiveId,
     string SelectedNodePath,
     ArchiveSummaryDto[]? Archives,
@@ -35,14 +34,10 @@ public sealed record RpcOperationResponse(
 
 public sealed record TreeChildrenResponse(
     bool Ok,
-    string? Error,
-    string ArchiveId,
-    string ParentPath,
     TreeNodeDto[] Nodes) : IResultDto;
 
 public sealed record SearchResponseDto(
     bool Ok,
-    string? Error,
     SearchResultItemDto[] Results) : IResultDto;
 
 public sealed record BinaryExportResponseDto(
@@ -82,7 +77,6 @@ public sealed class SaveArchiveRequest {
 
 public sealed class BrowseSaveFileRequest {
     public string? DefaultFileName { get; set; }
-    public string? InitialDirectory { get; set; }
 }
 
 public sealed class CloseArchiveRequest {
@@ -138,7 +132,6 @@ public sealed class RenameNodeRequest {
 public sealed class PasteNodeRequest {
     public string? ArchiveId { get; set; }
     public string? TargetPath { get; set; }
-    public string? OverrideName { get; set; }
 }
 
 public sealed class ReplaceCanvasRequest {
@@ -146,9 +139,6 @@ public sealed class ReplaceCanvasRequest {
     public string? Path { get; set; }
     public byte[]? PngBytes { get; set; }
     public WzCanvasFormat? Format { get; set; }
-    public int? OriginX { get; set; }
-    public int? OriginY { get; set; }
-    public int? DelayMs { get; set; }
 }
 
 public sealed class ChangeCanvasFormatRequest {
@@ -161,7 +151,6 @@ public sealed class ReplaceSoundRequest {
     public string? ArchiveId { get; set; }
     public string? Path { get; set; }
     public byte[]? AudioBytes { get; set; }
-    public int? DurationMs { get; set; }
 }
 
 public sealed class ApplyJsonRequest {
@@ -175,7 +164,6 @@ public sealed class SearchNodesRequest {
     public string? Query { get; set; }
     public string? ValueQuery { get; set; }
     public RepackerPropertyKind? PropertyKindFilter { get; set; }
-    public bool CaseSensitive { get; set; }
     public bool ExactMatch { get; set; }
     public int MaxResults { get; set; } = 250;
 }

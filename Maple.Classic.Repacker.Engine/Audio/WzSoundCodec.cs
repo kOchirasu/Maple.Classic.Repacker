@@ -113,9 +113,9 @@ public static class WzSoundCodec {
             sound.Duration);
     }
 
-    public static WzValue.Sound CreateFromAudioBytes(ReadOnlySpan<byte> audioBytes, int? durationMsOverride = null) {
+    public static WzValue.Sound CreateFromAudioBytes(ReadOnlySpan<byte> audioBytes) {
         if (audioBytes.IsEmpty) {
-            return new WzValue.Sound(0, durationMsOverride ?? 0);
+            return new WzValue.Sound(0, 0);
         }
 
         // Check if input is RIFF WAVE
@@ -131,7 +131,7 @@ public static class WzSoundCodec {
 
             // Find "data" chunk or store full RIFF WAVE with PCM WAVEFORMATEX header
             byte[] dx8Header = BuildDx8WaveHeader(formatTag == WzWaveFormatTag.Unknown ? WzWaveFormatTag.Pcm : formatTag, channels, sampleRate, byteRate, blockAlign, bitsPerSample);
-            int computedDuration = durationMsOverride ?? (byteRate > 0 ? (int) ((long) (audioBytes.Length - 44) * 1000L / byteRate) : 1000);
+            int computedDuration = byteRate > 0 ? (int) ((long) (audioBytes.Length - 44) * 1000L / byteRate) : 1000;
             return new WzValue.Sound(audioBytes.Length, Math.Max(1, computedDuration), audioBytes.ToArray(), dx8Header);
         }
 
@@ -140,7 +140,7 @@ public static class WzSoundCodec {
         int sr = mp3Sr > 0 ? mp3Sr : 44100;
         ushort ch = (ushort) (mp3Ch > 0 ? mp3Ch : 2);
         int byteRateMp3 = bitrateKbps > 0 ? (bitrateKbps * 1000) / 8 : 16000;
-        int duration = durationMsOverride ?? (byteRateMp3 > 0 ? (int) ((long) audioBytes.Length * 1000L / byteRateMp3) : 1000);
+        int duration = byteRateMp3 > 0 ? (int) ((long) audioBytes.Length * 1000L / byteRateMp3) : 1000;
         byte[] mp3Header = BuildDx8Mp3Header(ch, sr, byteRateMp3);
         return new WzValue.Sound(audioBytes.Length, Math.Max(1, duration), audioBytes.ToArray(), mp3Header);
     }

@@ -17,11 +17,10 @@ internal static class SearchExportRpcHandlers {
             Query = req.Query,
             ValueQuery = req.ValueQuery,
             PropertyKindFilter = req.PropertyKindFilter,
-            CaseSensitive = req.CaseSensitive,
             ExactMatch = req.ExactMatch,
             MaxResults = req.MaxResults > 0 ? req.MaxResults : 250,
         });
-        return new SearchResponseDto(true, null, hits);
+        return new SearchResponseDto(true, hits);
     }
 
     private static RpcOperationResponse BatchExport(RpcContext ctx, BatchExportRequest req) {

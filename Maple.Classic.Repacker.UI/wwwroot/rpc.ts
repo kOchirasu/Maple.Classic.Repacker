@@ -302,15 +302,13 @@ namespace MapleRepacker {
         name: string;
         filePath: string;
         version: number;
-        encVer: number;
-        fStart: number;
-        copyright: string;
-        fileSize: number;
-        directoryCount: number;
         imageCount: number;
         modifiedImageCount: number;
         changeState: RepackerChangeState;
         linkedFilePaths?: string[];
+        /** Archive-wide undo/redo availability (drives the Undo/Redo toolbar buttons). */
+        canUndo: boolean;
+        canRedo: boolean;
     }
 
     export interface TreeNodeDto {
@@ -346,22 +344,18 @@ namespace MapleRepacker {
         height: number;
         format: WzCanvasFormat;
         formatName: string;
-        compressedBytes: number;
         pngBytes: Uint8Array | number[];
         origin: VectorPointDto;
         lt?: VectorPointDto | null;
         rb?: VectorPointDto | null;
         head?: VectorPointDto | null;
         delayMs: number;
-        zLayer?: string | null;
         inlink?: string | null;
         outlink?: string | null;
         resolvedLinkPath?: string | null;
-        isLinkStub: boolean;
     }
 
     export interface AnimationFrameDto {
-        frameIndex: number;
         frameName: string;
         framePath: string;
         width: number;
@@ -381,41 +375,36 @@ namespace MapleRepacker {
         dataLength: number;
         durationMs: number;
         mimeType: string;
-        extension: string;
         formatName: string;
         sampleRate: number;
         channels: number;
-        bitsPerSample: number;
         audioBytes: Uint8Array | number[];
-        headerBytes: Uint8Array | number[];
     }
 
     export interface NodeInspectionDto {
-        ok: boolean;
-        error?: string | null;
         archiveId: string;
         archiveName: string;
         path: string;
         name: string;
-        imagePath?: string | null;
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
         displayValue: string;
         rawStringValue?: string | null;
-        numericIntValue?: number | null;
-        numericFloatValue?: number | null;
         vectorValue?: VectorPointDto | null;
         childCount: number;
         sizeBytes: number;
         changeState: RepackerChangeState;
-        canUndo: boolean;
-        canRedo: boolean;
-        jsonPreview: string;
         children: SubPropertyRowDto[];
+        preview: NodePreviewDto;
+    }
+
+    /** Renderable views of the inspected node: stage previews (following UOL links), JSON editor text and hex bytes. */
+    export interface NodePreviewDto {
         canvas?: CanvasPreviewDto | null;
         animationFrames: AnimationFrameDto[];
         sound?: SoundPreviewDto | null;
         resolvedUolTargetPath?: string | null;
+        jsonPreview: string;
         rawBinarySlice: Uint8Array | number[];
     }
 
@@ -431,8 +420,6 @@ namespace MapleRepacker {
 
     export interface ClipboardStateDto {
         hasData: boolean;
-        sourceArchiveId?: string | null;
-        sourcePath?: string | null;
         nodeName?: string | null;
         nodeKind: RepackerNodeKind;
         propertyKind: RepackerPropertyKind;
@@ -453,13 +440,11 @@ namespace MapleRepacker {
         showOriginCrosshair?: boolean | null;
         showVectorBounds?: boolean | null;
         showPixelGrid?: boolean | null;
-        defaultWzVersion?: number | null;
     }
 
     /** Full workspace status, as seen by the app (deltas from the server are merged into this). */
     export interface WorkspaceStatusPayloadDto {
         type: string;
-        stateVersion: number;
         selectedArchiveId?: string | null;
         selectedNodePath: string;
         archives: ArchiveSummaryDto[];
@@ -476,7 +461,6 @@ namespace MapleRepacker {
      */
     interface WorkspaceStatusDelta {
         type: string;
-        stateVersion: number;
         selectedArchiveId?: string | null;
         selectedNodePath: string;
         archives?: ArchiveSummaryDto[] | null;
@@ -503,15 +487,11 @@ namespace MapleRepacker {
 
     export interface TreeChildrenResponse {
         ok: boolean;
-        error?: string | null;
-        archiveId: string;
-        parentPath: string;
         nodes: TreeNodeDto[];
     }
 
     export interface SearchResponseDto {
         ok: boolean;
-        error?: string | null;
         results: SearchResultItemDto[];
     }
 
@@ -589,7 +569,6 @@ namespace MapleRepacker {
         const logs = keptLogs.concat(delta.logs ?? []);
         return {
             type: delta.type,
-            stateVersion: delta.stateVersion,
             selectedArchiveId: delta.selectedArchiveId,
             selectedNodePath: delta.selectedNodePath,
             archives: delta.archives ?? prev?.archives ?? [],

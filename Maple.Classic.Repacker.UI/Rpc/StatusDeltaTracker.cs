@@ -51,7 +51,6 @@ internal sealed class StatusDeltaTracker {
 
         return new WorkspaceStatusPayloadDto(
             "status",
-            ctx.Workspace.StateVersion,
             selectedArchiveId,
             selectedNodePath,
             archives,

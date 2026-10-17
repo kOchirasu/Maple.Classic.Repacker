@@ -14,13 +14,14 @@ internal static class NodeQueryRpcHandlers {
     private static TreeChildrenResponse TreeChildren(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string parentPath = req.Path ?? string.Empty;
-        return new TreeChildrenResponse(true, null, archiveId, parentPath, ctx.Workspace.GetTreeChildren(archiveId, parentPath));
+        return new TreeChildrenResponse(true, ctx.Workspace.GetTreeChildren(archiveId, parentPath));
     }
 
-    private static NodeInspectionDto Inspect(RpcContext ctx, NodeRefRequest req) {
+    private static IResultDto Inspect(RpcContext ctx, NodeRefRequest req) {
         string archiveId = ctx.ResolveArchiveId(req.ArchiveId);
         string path = req.Path ?? string.Empty;
         ctx.Workspace.SelectNode(archiveId, path);
-        return ctx.Workspace.InspectNode(archiveId, path);
+        (string? error, NodeInspectionDto? inspection) = ctx.Workspace.InspectNode(archiveId, path);
+        return inspection ?? (IResultDto) RpcContext.Fail(error ?? "Inspection failed.");
     }
 }

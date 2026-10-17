@@ -90,15 +90,12 @@ public sealed record ArchiveSummaryDto(
     string Name,
     string FilePath,
     ushort Version,
-    ushort EncVer,
-    uint FStart,
-    string Copyright,
-    long FileSize,
-    int DirectoryCount,
     int ImageCount,
     int ModifiedImageCount,
     RepackerChangeState ChangeState = RepackerChangeState.Unchanged,
-    string[]? LinkedFilePaths = null);
+    string[]? LinkedFilePaths = null,
+    bool CanUndo = false,
+    bool CanRedo = false);
 
 /// <summary>
 /// One row of the lazily-loaded tree. <see cref="ChildCount"/> is 0 for an <c>.img</c> until it is parsed, so the UI
@@ -132,21 +129,17 @@ public sealed record CanvasPreviewDto(
     int Height,
     WzCanvasFormat Format,
     string FormatName,
-    int CompressedBytes,
     byte[] PngBytes,
     VectorPointDto Origin,
     VectorPointDto? Lt,
     VectorPointDto? Rb,
     VectorPointDto? Head,
     int DelayMs,
-    string? ZLayer,
     string? Inlink,
     string? Outlink,
-    string? ResolvedLinkPath,
-    bool IsLinkStub);
+    string? ResolvedLinkPath);
 
 public sealed record AnimationFrameDto(
-    int FrameIndex,
     string FrameName,
     string FramePath,
     int Width,
@@ -165,48 +158,51 @@ public sealed record SoundPreviewDto(
     int DataLength,
     int DurationMs,
     string MimeType,
-    string Extension,
     string FormatName,
     int SampleRate,
     int Channels,
-    int BitsPerSample,
-    byte[] AudioBytes,
-    byte[] HeaderBytes);
+    byte[] AudioBytes);
 
+/// <summary>
+/// Everything the UI shows for the selected node: what it is (identity, value, size, change state), its child rows,
+/// and the <see cref="Preview"/> rendered on the stage and in the workbench tabs. Failures are reported as an RPC error
+/// rather than through this DTO.
+/// </summary>
 public sealed record NodeInspectionDto(
-    bool Ok,
-    string? Error,
     string ArchiveId,
     string ArchiveName,
     string Path,
     string Name,
-    string? ImagePath,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind,
     string DisplayValue,
     string? RawStringValue,
-    long? NumericIntValue,
-    double? NumericFloatValue,
     VectorPointDto? VectorValue,
     int ChildCount,
     int SizeBytes,
     RepackerChangeState ChangeState,
-    bool CanUndo,
-    bool CanRedo,
-    string JsonPreview,
     SubPropertyRowDto[] Children,
+    NodePreviewDto Preview) : IResultDto {
+    public bool Ok => true;
+}
+
+/// <summary>
+/// Renderable views of the selected node: the canvas/animation/sound stage (following a UOL link to its target), the
+/// JSON editor text and the hex dump bytes.
+/// </summary>
+public sealed record NodePreviewDto(
     CanvasPreviewDto? Canvas,
     AnimationFrameDto[] AnimationFrames,
     SoundPreviewDto? Sound,
     string? ResolvedUolTargetPath,
-    byte[] RawBinarySlice) : IResultDto;
+    string JsonPreview,
+    byte[] RawBinarySlice);
 
 public sealed record SearchQueryDto {
     public string? ArchiveId { get; init; }
     public string? Query { get; init; }
     public string? ValueQuery { get; init; }
     public RepackerPropertyKind? PropertyKindFilter { get; init; }
-    public bool CaseSensitive { get; init; }
     public bool ExactMatch { get; init; }
     public int MaxResults { get; init; } = 250;
 }
@@ -222,8 +218,6 @@ public sealed record SearchResultItemDto(
 
 public sealed record ClipboardStateDto(
     bool HasData,
-    string? SourceArchiveId,
-    string? SourcePath,
     string? NodeName,
     RepackerNodeKind NodeKind,
     RepackerPropertyKind PropertyKind);

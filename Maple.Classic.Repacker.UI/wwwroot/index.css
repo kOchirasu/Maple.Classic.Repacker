@@ -1697,6 +1697,13 @@ body.resizing-row * {
     border-bottom: 1px solid var(--border-subtle);
 }
 
+.form-hint {
+    margin-top: 4px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
 .logs-hint {
     font-size: 11px;
     color: var(--text-muted);

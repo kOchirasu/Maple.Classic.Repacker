@@ -39,8 +39,6 @@ public sealed class RepackerWorkspace : IDisposable {
     private ClipboardEntry? clipboard;
 
     private sealed record ClipboardEntry(
-        string SourceArchiveId,
-        string SourcePath,
         string Name,
         RepackerNodeKind NodeKind,
         RepackerPropertyKind PropertyKind,
@@ -124,8 +122,8 @@ public sealed class RepackerWorkspace : IDisposable {
     private ClipboardStateDto GetClipboardStateUnsafe() {
         AssertLockHeld();
         return clipboard is null
-            ? new ClipboardStateDto(false, null, null, null, RepackerNodeKind.Property, RepackerPropertyKind.None)
-            : new ClipboardStateDto(true, clipboard.SourceArchiveId, clipboard.SourcePath, clipboard.Name, clipboard.NodeKind, clipboard.PropertyKind);
+            ? new ClipboardStateDto(false, null, RepackerNodeKind.Property, RepackerPropertyKind.None)
+            : new ClipboardStateDto(true, clipboard.Name, clipboard.NodeKind, clipboard.PropertyKind);
     }
 
     public void SelectNode(string? archiveId, string? path) {
@@ -470,11 +468,11 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
-    public NodeInspectionDto InspectNode(string archiveId, string? path, bool includeAnimation = true) {
+    public (string? Error, NodeInspectionDto? Inspection) InspectNode(string archiveId, string? path, bool includeAnimation = true) {
         lock (syncLock) {
             ArchiveSession? session = FindSessionUnsafe(archiveId);
             if (session is null) {
-                return ErrorInspection(archiveId, path ?? string.Empty, $"Archive \"{archiveId}\" not found.");
+                return ($"Archive \"{archiveId}\" not found.", null);
             }
 
             string norm = ArchiveSession.NormalizePath(path ?? string.Empty);
@@ -487,7 +485,7 @@ public sealed class RepackerWorkspace : IDisposable {
             if (imgPath is null) {
                 VirtualFsNode? dirNode = session.ResolveVirtualNode(norm);
                 if (dirNode is null) {
-                    return ErrorInspection(archiveId, norm, $"Node \"{norm}\" not found in \"{session.Name}\".");
+                    return ($"Node \"{norm}\" not found in \"{session.Name}\".", null);
                 }
 
                 if (session.EnsureDirectoryLinkedWithChildren(dirNode)) {
@@ -526,33 +524,21 @@ public sealed class RepackerWorkspace : IDisposable {
                                 : RepackerChangeState.Unchanged)
                         : session.GetDirectoryChangeState(norm, dirNode);
 
-                return new NodeInspectionDto(
-                    true,
-                    null,
+                return (null, new NodeInspectionDto(
                     session.ArchiveId,
                     session.Name,
                     norm,
                     displayName,
-                    null,
                     nodeKind,
                     RepackerPropertyKind.None,
                     $"{dCount} directories, {iCount} images",
-                    null,
-                    null,
-                    null,
-                    null,
+                    RawStringValue: null,
+                    VectorValue: null,
                     dirNode.Children.Count,
-                    0,
+                    SizeBytes: 0,
                     dirChangeState,
-                    session.CanUndo,
-                    session.CanRedo,
-                    summaryJson,
                     rows,
-                    null,
-                    [],
-                    null,
-                    null,
-                    []);
+                    new NodePreviewDto(null, [], null, null, summaryJson, [])));
             }
 
             // Case 2: Image node or Property inside an Image
@@ -564,7 +550,7 @@ public sealed class RepackerWorkspace : IDisposable {
                     ? (imgRoot, imgDeleted)
                     : session.ResolvePropertyOrDeleted(imgPath, imgRoot, subPath);
                 if (target is null) {
-                    return ErrorInspection(archiveId, norm, $"Property \"{subPath}\" not found inside \"{imgPath}\".");
+                    return ($"Property \"{subPath}\" not found inside \"{imgPath}\".", null);
                 }
                 bool isNodeDeleted = imgDeleted || propDeleted;
 
@@ -576,8 +562,6 @@ public sealed class RepackerWorkspace : IDisposable {
                 (RepackerPropertyKind propKind, string displayValue) = DescribeWzValue(target);
 
                 string? rawStr = target.AsString();
-                long? numInt = target is WzValue.Short or WzValue.Int or WzValue.Long ? target.AsLong() : null;
-                double? numFloat = target is WzValue.Float or WzValue.Double ? target.AsDouble() : null;
                 VectorPointDto? vecDto = target is WzValue.Vector(var vx, var vy) ? new VectorPointDto(vx, vy) : null;
 
                 SubPropertyRowDto[] childRows = ChildRows(session, imgPath, subPath, target, isNodeDeleted);
@@ -624,37 +608,20 @@ public sealed class RepackerWorkspace : IDisposable {
                             f0.Height,
                             f0.Format,
                             f0.Format.GetDisplayName(),
-                            f0.PngBytes.Length,
                             f0.PngBytes,
                             f0.Origin,
                             f0.Lt,
                             f0.Rb,
                             f0.Head,
                             f0.DelayMs,
-                            null,
-                            null,
-                            null,
-                            null,
-                            false);
+                            Inlink: null,
+                            Outlink: null,
+                            ResolvedLinkPath: null);
                     }
                 }
 
                 // Sound preview (if target or UOL target is Sound_DX8)
-                SoundPreviewDto? soundDto = null;
-                if (effectiveVisualTarget is WzValue.Sound soundVal) {
-                    ExtractedSoundData extracted = WzSoundCodec.ExtractAudioStream(soundVal);
-                    soundDto = new SoundPreviewDto(
-                        soundVal.DataLength,
-                        soundVal.Duration,
-                        extracted.MimeType,
-                        extracted.Extension,
-                        extracted.FormatName,
-                        extracted.SampleRate,
-                        extracted.Channels,
-                        extracted.BitsPerSample,
-                        extracted.AudioBytes,
-                        soundVal.Header.ToArray());
-                }
+                SoundPreviewDto? soundDto = effectiveVisualTarget is WzValue.Sound soundVal ? BuildSoundPreview(soundVal) : null;
 
                 // If inspecting a container node with no direct preview yet, preview its first previewable child node
                 if (canvasDto is null && soundDto is null && effectiveVisualTarget is not WzValue.String && effectiveVisualTarget.Children is { Count: > 0 } containerChildren) {
@@ -673,18 +640,7 @@ public sealed class RepackerWorkspace : IDisposable {
                             break;
                         }
                         if (childVal is WzValue.Sound childSound) {
-                            ExtractedSoundData extracted = WzSoundCodec.ExtractAudioStream(childSound);
-                            soundDto = new SoundPreviewDto(
-                                childSound.DataLength,
-                                childSound.Duration,
-                                extracted.MimeType,
-                                extracted.Extension,
-                                extracted.FormatName,
-                                extracted.SampleRate,
-                                extracted.Channels,
-                                extracted.BitsPerSample,
-                                extracted.AudioBytes,
-                                childSound.Header.ToArray());
+                            soundDto = BuildSoundPreview(childSound);
                             break;
                         }
                         if (childVal is WzValue.String) {
@@ -703,37 +659,37 @@ public sealed class RepackerWorkspace : IDisposable {
                 string jsonPreview = target.ToJson();
                 RepackerChangeState nodeChangeState = EvaluatePropertyChangeState(session, imgPath, subPath, target, isNodeDeleted);
 
-                return new NodeInspectionDto(
-                    true,
-                    null,
+                return (null, new NodeInspectionDto(
                     session.ArchiveId,
                     session.Name,
                     norm,
                     leafName,
-                    imgPath,
                     nodeKind,
                     propKind,
                     displayValue,
                     rawStr,
-                    numInt,
-                    numFloat,
                     vecDto,
                     ownChildCount,
                     sizeBytes,
                     nodeChangeState,
-                    session.CanUndo,
-                    session.CanRedo,
-                    jsonPreview,
                     childRows,
-                    canvasDto,
-                    animFrames,
-                    soundDto,
-                    resolvedUolPath,
-                    rawSlice);
+                    new NodePreviewDto(canvasDto, animFrames, soundDto, resolvedUolPath, jsonPreview, rawSlice)));
             } catch (Exception ex) {
-                return ErrorInspection(archiveId, norm, ex.Message);
+                return (ex.Message, null);
             }
         }
+    }
+
+    private static SoundPreviewDto BuildSoundPreview(WzValue.Sound sound) {
+        ExtractedSoundData extracted = WzSoundCodec.ExtractAudioStream(sound);
+        return new SoundPreviewDto(
+            sound.DataLength,
+            sound.Duration,
+            extracted.MimeType,
+            extracted.FormatName,
+            extracted.SampleRate,
+            extracted.Channels,
+            extracted.AudioBytes);
     }
 
     private static SubPropertyRowDto[] ChildRows(ArchiveSession session, string imgPath, string subPath, WzValue target, bool parentDeleted) =>
@@ -1071,14 +1027,14 @@ public sealed class RepackerWorkspace : IDisposable {
             if (target.IsImageRoot) {
                 string imgLeaf = Path.GetFileName(target.ImagePath);
                 byte[] bytes = target.ImageRoot.ToBytes();
-                clipboard = new ClipboardEntry(session.ArchiveId, norm, imgLeaf, RepackerNodeKind.Image, RepackerPropertyKind.Object, bytes);
+                clipboard = new ClipboardEntry(imgLeaf, RepackerNodeKind.Image, RepackerPropertyKind.Object, bytes);
                 AppendLogUnsafe($"Copied image \"{imgLeaf}\" ({bytes.Length:N0} B) to clipboard.", RepackerLogLevel.Info);
             } else {
                 string propLeaf = LeafOf(target.SubPath);
                 // Wrap the property in a 1-property Object so any WzValue type serializes cleanly
                 byte[] bytes = new WzValue.Object([new WzProperty(propLeaf, target.Value)]).ToBytes();
                 RepackerPropertyKind kind = DescribeWzValue(target.Value).Kind;
-                clipboard = new ClipboardEntry(session.ArchiveId, norm, propLeaf, RepackerNodeKind.Property, kind, bytes);
+                clipboard = new ClipboardEntry(propLeaf, RepackerNodeKind.Property, kind, bytes);
                 AppendLogUnsafe($"Copied property \"{propLeaf}\" ({kind}) to clipboard.", RepackerLogLevel.Info);
             }
             return (null, GetClipboardStateUnsafe());
@@ -1086,8 +1042,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
     public (string? Error, string Path) PasteNode(
         string targetArchiveId,
-        string? targetPath,
-        string? overrideName = null) =>
+        string? targetPath) =>
         WithSessionPath(targetArchiveId, session => {
             if (clipboard is null) {
                 return ("Clipboard is empty.", string.Empty);
@@ -1098,7 +1053,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
             // A whole .img pasted onto the archive root or a directory
             if (clipboard.NodeKind == RepackerNodeKind.Image && imgPath is null) {
-                string targetImgName = !string.IsNullOrWhiteSpace(overrideName) ? overrideName.Trim() : clipboard.Name;
+                string targetImgName = clipboard.Name;
                 if (!targetImgName.EndsWith(".img", StringComparison.OrdinalIgnoreCase)) {
                     targetImgName += ".img";
                 }
@@ -1134,7 +1089,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 ? pasted
                 : pasted.Children[0].Value;
 
-            string baseName = !string.IsNullOrWhiteSpace(overrideName) ? overrideName.Trim() : Path.GetFileNameWithoutExtension(clipboard.Name);
+            string baseName = Path.GetFileNameWithoutExtension(clipboard.Name);
             string finalName = baseName;
             for (int n = 2; kids.Any(p => p.Name == finalName); n++) {
                 finalName = $"{baseName}_{n}";
@@ -1156,10 +1111,7 @@ public sealed class RepackerWorkspace : IDisposable {
         string archiveId,
         string path,
         byte[] pngBytes,
-        WzCanvasFormat? format = null,
-        int? originX = null,
-        int? originY = null,
-        int? delayMs = null) =>
+        WzCanvasFormat? format = null) =>
         WithSession(archiveId, session => {
             (string? error, NodeTarget<WzValue.Canvas> target) = ResolveNode<WzValue.Canvas>(
                 session, path, "Select a Canvas property to replace its image.");
@@ -1180,12 +1132,6 @@ public sealed class RepackerWorkspace : IDisposable {
                 canvas.Format = (int) targetFormat;
                 canvas.Payload = compressed;
                 canvas.Properties.RemoveAll(static p => p.Name is "_outlink" or "_inlink");
-                if (originX.HasValue && originY.HasValue) {
-                    canvas["origin"] = new WzValue.Vector(originX.Value, originY.Value);
-                }
-                if (delayMs.HasValue) {
-                    canvas["delay"] = new WzValue.Int(delayMs.Value);
-                }
                 return null;
             }, () => $"Replaced Canvas \"{path}\" with {width}x{height} PNG ({targetFormat.GetDisplayName()}, {compressed.Length:N0} B).");
         });
@@ -1210,8 +1156,7 @@ public sealed class RepackerWorkspace : IDisposable {
     public string? ReplaceSound(
         string archiveId,
         string path,
-        byte[] audioBytes,
-        int? durationMs = null) =>
+        byte[] audioBytes) =>
         WithSession(archiveId, session => {
             (string? error, NodeTarget<WzValue> target) = ResolveNode<WzValue>(
                 session, path, "Select a Sound property to replace its audio.");
@@ -1219,7 +1164,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 return error;
             }
 
-            WzValue.Sound newSound = WzSoundCodec.CreateFromAudioBytes(audioBytes, durationMs);
+            WzValue.Sound newSound = WzSoundCodec.CreateFromAudioBytes(audioBytes);
             return EditImage(
                 session,
                 target.ImagePath,
@@ -1316,7 +1261,7 @@ public sealed class RepackerWorkspace : IDisposable {
         int maxResults = Math.Clamp(query.MaxResults, 1, 2000);
         string nameFilter = (query.Query ?? string.Empty).Trim();
         string valFilter = (query.ValueQuery ?? string.Empty).Trim();
-        StringComparison cmp = query.CaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+        const StringComparison cmp = StringComparison.OrdinalIgnoreCase;
 
         var results = new List<SearchResultItemDto>();
 

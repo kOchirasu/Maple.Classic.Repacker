@@ -27,7 +27,6 @@ public sealed record SavedRepackerUiStateDto {
     public bool? ShowOriginCrosshair { get; set; }
     public bool? ShowVectorBounds { get; set; }
     public bool? ShowPixelGrid { get; set; }
-    public int? DefaultWzVersion { get; set; }
 }
 
 public sealed class PersistedRepackerSettings {
@@ -147,7 +146,6 @@ public sealed class UserSettingsStore {
                 ShowOriginCrosshair = patch.ShowOriginCrosshair ?? cur.ShowOriginCrosshair,
                 ShowVectorBounds = patch.ShowVectorBounds ?? cur.ShowVectorBounds,
                 ShowPixelGrid = patch.ShowPixelGrid ?? cur.ShowPixelGrid,
-                DefaultWzVersion = patch.DefaultWzVersion ?? cur.DefaultWzVersion,
             };
             SaveToDiskUnsafe();
         }

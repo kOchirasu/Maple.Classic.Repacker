@@ -178,6 +178,8 @@ namespace MapleRepacker {
                 }
             }
 
+            this.updateUndoRedoButtons();
+
             // Update archive count & search dropdown
             const countBadge = document.getElementById('archiveCountBadge')!;
             countBadge.textContent = `${this.archives.length} archive${this.archives.length === 1 ? '' : 's'}`;
@@ -623,27 +625,34 @@ namespace MapleRepacker {
                 this.renderTree();
             }
 
-            const res = await rpcCall<NodeInspectionDto>(RpcMethod.NodeInspect, {
+            // Success returns the inspection; failure returns the standard error response
+            const res = await rpcCall<NodeInspectionDto | RpcOperationResponse>(RpcMethod.NodeInspect, {
                 archiveId,
                 path,
             });
-            if (!res.ok || !res.data) {
-                this.showToast(res.data?.error || 'Failed to inspect node', ToastKind.Error);
+            if (!res.ok) {
+                this.showToast((res.data as RpcOperationResponse)?.error || 'Failed to inspect node', ToastKind.Error);
                 return;
             }
 
-            this.currentInspection = res.data;
-            await this.renderInspection(res.data);
+            const inspection = res.data as NodeInspectionDto;
+            this.currentInspection = inspection;
+            await this.renderInspection(inspection);
         }
 
         // ---------------------------------------------------------------------
         // Stage & Inspector Rendering
         // ---------------------------------------------------------------------
 
+        /** Undo/redo is archive-wide, so the toolbar follows the selected archive's summary. */
+        private updateUndoRedoButtons(): void {
+            const archive = this.archives.find((a) => a.archiveId === this.selectedArchiveId);
+            (document.getElementById('btnUndo') as HTMLButtonElement).disabled = !archive?.canUndo;
+            (document.getElementById('btnRedo') as HTMLButtonElement).disabled = !archive?.canRedo;
+        }
+
         private async renderInspection(dto: NodeInspectionDto): Promise<void> {
-            // Update Undo / Redo toolbar buttons
-            (document.getElementById('btnUndo') as HTMLButtonElement).disabled = !dto.canUndo;
-            (document.getElementById('btnRedo') as HTMLButtonElement).disabled = !dto.canRedo;
+            this.updateUndoRedoButtons();
 
             // 1. Breadcrumbs & Meta Chips
             this.renderBreadcrumbs(dto);
@@ -667,13 +676,13 @@ namespace MapleRepacker {
             this.renderPropertyInspector(dto);
 
             // 6. CodeMirror 6 JSON Subtree Editor
-            this.lastLoadedJsonText = dto.jsonPreview || '{}';
+            this.lastLoadedJsonText = dto.preview.jsonPreview || '{}';
             if (this.jsonEditor) {
                 this.jsonEditor.setValue(this.lastLoadedJsonText);
             }
 
             // 7. Hex & Binary Inspector
-            this.activeHexBytes = toUint8Array(dto.rawBinarySlice);
+            this.activeHexBytes = toUint8Array(dto.preview.rawBinarySlice);
             this.selectedHexOffset = 0;
             this.renderHexInspector();
         }
@@ -732,8 +741,8 @@ namespace MapleRepacker {
             this.revokeDecodedFrames();
 
             const section = document.getElementById('canvasStageSection')!;
-            const hasSingleCanvas = Boolean(dto.canvas && dto.canvas.pngBytes);
-            const hasAnimFrames = Array.isArray(dto.animationFrames) && dto.animationFrames.length > 0;
+            const hasSingleCanvas = Boolean(dto.preview.canvas && dto.preview.canvas.pngBytes);
+            const hasAnimFrames = Array.isArray(dto.preview.animationFrames) && dto.preview.animationFrames.length > 0;
 
             if (!hasSingleCanvas && !hasAnimFrames) {
                 section.classList.add('hidden');
@@ -744,29 +753,29 @@ namespace MapleRepacker {
             // Outlink / Inlink / UOL resolution banner
             const linkBanner = document.getElementById('linkResolutionBanner')!;
             const linkText = document.getElementById('linkBannerText')!;
-            if (dto.canvas && (dto.canvas.outlink || dto.canvas.inlink)) {
+            if (dto.preview.canvas && (dto.preview.canvas.outlink || dto.preview.canvas.inlink)) {
                 linkBanner.classList.remove('hidden');
-                const linkType = dto.canvas.outlink ? '_outlink' : '_inlink';
-                const rawLink = dto.canvas.outlink || dto.canvas.inlink || '';
-                const resolved = dto.canvas.resolvedLinkPath
-                    ? ` -> Resolved from ${dto.canvas.resolvedLinkPath}`
+                const linkType = dto.preview.canvas.outlink ? '_outlink' : '_inlink';
+                const rawLink = dto.preview.canvas.outlink || dto.preview.canvas.inlink || '';
+                const resolved = dto.preview.canvas.resolvedLinkPath
+                    ? ` -> Resolved from ${dto.preview.canvas.resolvedLinkPath}`
                     : ' (Unresolved external archive)';
                 linkText.textContent = `${linkType}: "${rawLink}"${resolved}`;
-            } else if (dto.resolvedUolTargetPath) {
+            } else if (dto.preview.resolvedUolTargetPath) {
                 linkBanner.classList.remove('hidden');
-                linkText.textContent = `UOL Link -> "${dto.resolvedUolTargetPath}"`;
+                linkText.textContent = `UOL Link -> "${dto.preview.resolvedUolTargetPath}"`;
             } else {
                 linkBanner.classList.add('hidden');
             }
 
-            if (dto.canvas) {
+            if (dto.preview.canvas) {
                 const fmtSelect = document.getElementById('canvasFormatSelect') as HTMLSelectElement;
-                fmtSelect.value = dto.canvas.format || WzCanvasFormat.Bgra8888;
+                fmtSelect.value = dto.preview.canvas.format || WzCanvasFormat.Bgra8888;
             }
 
             // Decode frames into HTMLImageElements
-            if (hasAnimFrames && dto.animationFrames.length > 1) {
-                for (const f of dto.animationFrames) {
+            if (hasAnimFrames && dto.preview.animationFrames.length > 1) {
+                for (const f of dto.preview.animationFrames) {
                     const decoded = await this.decodePngBytesToFrame(
                         toUint8Array(f.pngBytes),
                         f.width,
@@ -785,8 +794,8 @@ namespace MapleRepacker {
                         this.decodedFrames.push(decoded);
                     }
                 }
-            } else if (dto.canvas) {
-                const c = dto.canvas;
+            } else if (dto.preview.canvas) {
+                const c = dto.preview.canvas;
                 const single = await this.decodePngBytesToFrame(
                     toUint8Array(c.pngBytes),
                     c.width,
@@ -1059,7 +1068,7 @@ namespace MapleRepacker {
 
             // HUD Overlay
             const hud = document.getElementById('canvasHudOverlay')!;
-            const fmtInfo = this.currentInspection?.canvas?.formatName || 'Canvas';
+            const fmtInfo = this.currentInspection?.preview.canvas?.formatName || 'Canvas';
             hud.innerHTML = `
                 <span>${frame.width}&times;${frame.height} px</span>
                 <span>Origin: (${frame.origin.x}, ${frame.origin.y})</span>
@@ -1077,14 +1086,14 @@ namespace MapleRepacker {
                 this.activeAudioUrl = null;
             }
 
-            if (!dto.sound) {
+            if (!dto.preview.sound) {
                 section.classList.add('hidden');
                 audioEl.removeAttribute('src');
                 return;
             }
 
             section.classList.remove('hidden');
-            const s = dto.sound;
+            const s = dto.preview.sound;
             const audioBytes = toUint8Array(s.audioBytes);
 
             const firstSoundChild =
@@ -1159,7 +1168,7 @@ namespace MapleRepacker {
                     sizeBytes: dto.sizeBytes,
                 };
             }
-            if (!dto.canvas && !dto.sound && (!dto.animationFrames || dto.animationFrames.length === 0)) {
+            if (!dto.preview.canvas && !dto.preview.sound && (!dto.preview.animationFrames || dto.preview.animationFrames.length === 0)) {
                 const firstStrChild = (dto.children || []).find(
                     (c) => c.propertyKind === RepackerPropertyKind.String
                 );
@@ -1208,14 +1217,14 @@ namespace MapleRepacker {
             if (dto.childCount === 0) {
                 return dto.path;
             }
-            if (dto.animationFrames && dto.animationFrames.length > 0) {
-                return dto.animationFrames[0].framePath;
+            if (dto.preview.animationFrames && dto.preview.animationFrames.length > 0) {
+                return dto.preview.animationFrames[0].framePath;
             }
-            if (dto.canvas && dto.propertyKind !== RepackerPropertyKind.Canvas) {
+            if (dto.preview.canvas && dto.propertyKind !== RepackerPropertyKind.Canvas) {
                 const firstCanvas = (dto.children || []).find((c) => c.propertyKind === RepackerPropertyKind.Canvas);
                 if (firstCanvas) return firstCanvas.path;
             }
-            if (dto.sound && dto.propertyKind !== RepackerPropertyKind.Sound) {
+            if (dto.preview.sound && dto.propertyKind !== RepackerPropertyKind.Sound) {
                 const firstSound = (dto.children || []).find((c) => c.propertyKind === RepackerPropertyKind.Sound);
                 if (firstSound) return firstSound.path;
             }
@@ -1235,9 +1244,9 @@ namespace MapleRepacker {
         private hasStagePreview(dto: NodeInspectionDto | null): boolean {
             if (!dto) return false;
             const hasCanvas =
-                Boolean(dto.canvas && dto.canvas.pngBytes) ||
-                (Array.isArray(dto.animationFrames) && dto.animationFrames.length > 0);
-            const hasSound = Boolean(dto.sound && dto.sound.audioBytes);
+                Boolean(dto.preview.canvas && dto.preview.canvas.pngBytes) ||
+                (Array.isArray(dto.preview.animationFrames) && dto.preview.animationFrames.length > 0);
+            const hasSound = Boolean(dto.preview.sound && dto.preview.sound.audioBytes);
             const hasString = Boolean(this.getActiveStringPreviewTarget(dto));
             return hasCanvas || hasSound || hasString;
         }
@@ -1422,10 +1431,10 @@ namespace MapleRepacker {
             if (dto.propertyKind === RepackerPropertyKind.Vector && dto.vectorValue) {
                 vecXInput.value = String(dto.vectorValue.x);
                 vecYInput.value = String(dto.vectorValue.y);
-            } else if (dto.propertyKind === RepackerPropertyKind.Canvas && dto.canvas) {
-                vecXInput.value = String(dto.canvas.origin.x);
-                vecYInput.value = String(dto.canvas.origin.y);
-                scalarInput.value = String(dto.canvas.delayMs);
+            } else if (dto.propertyKind === RepackerPropertyKind.Canvas && dto.preview.canvas) {
+                vecXInput.value = String(dto.preview.canvas.origin.x);
+                vecYInput.value = String(dto.preview.canvas.origin.y);
+                scalarInput.value = String(dto.preview.canvas.delayMs);
             } else {
                 scalarInput.value = dto.rawStringValue ?? dto.displayValue;
             }
@@ -2111,10 +2120,10 @@ namespace MapleRepacker {
             document.getElementById('btnJumpToLinkedTarget')!.addEventListener('click', () => {
                 const dto = this.currentInspection;
                 if (!dto) return;
-                if (dto.resolvedUolTargetPath) {
-                    void this.selectAndInspectNode(dto.archiveId, dto.resolvedUolTargetPath, true);
-                } else if (dto.canvas?.resolvedLinkPath) {
-                    const resolved = dto.canvas.resolvedLinkPath;
+                if (dto.preview.resolvedUolTargetPath) {
+                    void this.selectAndInspectNode(dto.archiveId, dto.preview.resolvedUolTargetPath, true);
+                } else if (dto.preview.canvas?.resolvedLinkPath) {
+                    const resolved = dto.preview.canvas.resolvedLinkPath;
                     const colonIdx = resolved.indexOf(':');
                     if (colonIdx > 0) {
                         const arName = resolved.slice(0, colonIdx);
@@ -3407,13 +3416,29 @@ namespace MapleRepacker {
                 </div>
                 <div class="form-row two-col hidden" id="modalVectorRow">
                     <div>
-                        <label>Vector X</label>
+                        <label id="modalVecXLabel">Vector X</label>
                         <input type="number" id="modalVecX" class="input-full" value="0" />
                     </div>
                     <div>
-                        <label>Vector Y</label>
+                        <label id="modalVecYLabel">Vector Y</label>
                         <input type="number" id="modalVecY" class="input-full" value="0" />
                     </div>
+                </div>
+                <div class="form-row hidden" id="modalPropFileRow">
+                    <label id="modalPropFileLabel">Source File (optional)</label>
+                    <input type="file" id="modalPropFile" class="input-full" />
+                    <div class="form-hint" id="modalPropFileHint"></div>
+                </div>
+                <div class="form-row hidden" id="modalCanvasFormatRow">
+                    <label>Pixel Format</label>
+                    <select id="modalCanvasFormat" class="select-full">
+                        <option value="${WzCanvasFormat.Bgra8888}">BGRA8888 (32-bit)</option>
+                        <option value="${WzCanvasFormat.Bgra4444}">BGRA4444 (16-bit)</option>
+                        <option value="${WzCanvasFormat.Bgr565}">BGR565 (16-bit)</option>
+                        <option value="${WzCanvasFormat.Bgr565Block16}">BGR565 Block16</option>
+                        <option value="${WzCanvasFormat.Dxt3}">DXT3 / BC2</option>
+                        <option value="${WzCanvasFormat.Dxt5}">DXT5 / BC3</option>
+                    </select>
                 </div>
                 `,
                 `
@@ -3422,20 +3447,40 @@ namespace MapleRepacker {
                 `
             );
 
+            const vecXInput = document.getElementById('modalVecX') as HTMLInputElement;
+            const vecYInput = document.getElementById('modalVecY') as HTMLInputElement;
+            const fileInput = document.getElementById('modalPropFile') as HTMLInputElement;
+
             const kindSel = document.getElementById('modalPropKind') as HTMLSelectElement;
             kindSel.addEventListener('change', () => {
                 const k = kindSel.value as RepackerPropertyKind;
-                document
-                    .getElementById('modalVectorRow')!
-                    .classList.toggle('hidden', k !== RepackerPropertyKind.Vector && k !== RepackerPropertyKind.Canvas);
+                const isCanvas = k === RepackerPropertyKind.Canvas;
+                const isSound = k === RepackerPropertyKind.Sound;
+                document.getElementById('modalVectorRow')!.classList.toggle('hidden', k !== RepackerPropertyKind.Vector && !isCanvas);
                 document.getElementById('modalScalarRow')!.classList.toggle(
                     'hidden',
                     k === RepackerPropertyKind.Vector ||
                         k === RepackerPropertyKind.Object ||
-                        k === RepackerPropertyKind.Canvas ||
-                        k === RepackerPropertyKind.Sound ||
+                        isCanvas ||
+                        isSound ||
                         k === RepackerPropertyKind.Null
                 );
+
+                // Canvas / Sound can be created from a file; the vector inputs become the Canvas origin
+                document.getElementById('modalPropFileRow')!.classList.toggle('hidden', !isCanvas && !isSound);
+                document.getElementById('modalCanvasFormatRow')!.classList.toggle('hidden', !isCanvas);
+                fileInput.value = '';
+                fileInput.accept = isCanvas ? '.png,image/png' : '.mp3,.wav,audio/*';
+                document.getElementById('modalPropFileLabel')!.textContent = isCanvas ? 'Source Image (.png, optional)' : 'Source Audio (.mp3 / .wav, optional)';
+                document.getElementById('modalPropFileHint')!.textContent = isCanvas
+                    ? 'Leave empty for a blank 32x32 sprite. Leave the origin empty to center it at the bottom.'
+                    : 'Leave empty for an empty Sound_DX8 property.';
+                document.getElementById('modalVecXLabel')!.textContent = isCanvas ? 'Origin X' : 'Vector X';
+                document.getElementById('modalVecYLabel')!.textContent = isCanvas ? 'Origin Y' : 'Vector Y';
+                vecXInput.value = isCanvas ? '' : '0';
+                vecYInput.value = isCanvas ? '' : '0';
+                vecXInput.placeholder = isCanvas ? 'auto' : '';
+                vecYInput.placeholder = isCanvas ? 'auto' : '';
             });
 
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
@@ -3443,8 +3488,15 @@ namespace MapleRepacker {
                 const name = (document.getElementById('modalPropName') as HTMLInputElement).value.trim();
                 const kind = kindSel.value as RepackerPropertyKind;
                 const rawValue = (document.getElementById('modalPropValue') as HTMLInputElement).value;
-                const vecX = Number((document.getElementById('modalVecX') as HTMLInputElement).value) || 0;
-                const vecY = Number((document.getElementById('modalVecY') as HTMLInputElement).value) || 0;
+                const isCanvas = kind === RepackerPropertyKind.Canvas;
+                // Blank Canvas origin inputs mean "let the server pick a default origin"
+                const readCoord = (input: HTMLInputElement): number | undefined =>
+                    input.value.trim() === '' ? (isCanvas ? undefined : 0) : Number(input.value) || 0;
+                const sourceFile = fileInput.files?.[0];
+                const binaryPayload =
+                    sourceFile && (isCanvas || kind === RepackerPropertyKind.Sound)
+                        ? new Uint8Array(await sourceFile.arrayBuffer())
+                        : undefined;
 
                 const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeAddProperty, {
                     archiveId: this.selectedArchiveId,
@@ -3452,8 +3504,10 @@ namespace MapleRepacker {
                     name,
                     kind,
                     rawValue,
-                    vecX,
-                    vecY,
+                    vecX: readCoord(vecXInput),
+                    vecY: readCoord(vecYInput),
+                    binaryPayload,
+                    canvasFormat: isCanvas ? ((document.getElementById('modalCanvasFormat') as HTMLSelectElement).value as WzCanvasFormat) : undefined,
                 });
                 if (res.ok && res.data.path) {
                     this.closeModal();
@@ -3475,6 +3529,11 @@ namespace MapleRepacker {
                     <label>Image Name</label>
                     <input type="text" id="modalImgName" class="input-full" placeholder="e.g. 01040001.img" />
                 </div>
+                <div class="form-row">
+                    <label>Import From File (optional)</label>
+                    <input type="file" id="modalImgFile" class="input-full" accept=".img,.json" />
+                    <div class="form-hint">A raw .img or an exported .json subtree. Leave empty for an empty image.</div>
+                </div>
                 `,
                 `
                 <button type="button" class="cmd-btn" id="btnModalCancel">Cancel</button>
@@ -3482,17 +3541,31 @@ namespace MapleRepacker {
                 `
             );
 
+            const imgNameInput = document.getElementById('modalImgName') as HTMLInputElement;
+            const imgFileInput = document.getElementById('modalImgFile') as HTMLInputElement;
+            imgFileInput.addEventListener('change', () => {
+                // Suggest the file's name (as .img) unless the user already typed one
+                const file = imgFileInput.files?.[0];
+                if (file && !imgNameInput.value.trim()) {
+                    imgNameInput.value = file.name.replace(/\.json$/i, '.img');
+                }
+            });
+
             document.getElementById('btnModalCancel')!.addEventListener('click', () => this.closeModal());
             document.getElementById('btnModalConfirm')!.addEventListener('click', async () => {
-                const imageName = (document.getElementById('modalImgName') as HTMLInputElement).value.trim();
+                const imageName = imgNameInput.value.trim();
+                const sourceFile = imgFileInput.files?.[0];
+                const isJson = sourceFile?.name.toLowerCase().endsWith('.json') ?? false;
                 const res = await rpcCall<RpcOperationResponse>(RpcMethod.NodeAddImage, {
                     archiveId: this.selectedArchiveId,
                     parentPath: this.selectedPath,
                     imageName,
+                    rawImgBytes: sourceFile && !isJson ? new Uint8Array(await sourceFile.arrayBuffer()) : undefined,
+                    jsonContent: sourceFile && isJson ? await sourceFile.text() : undefined,
                 });
                 if (res.ok && res.data.path) {
                     this.closeModal();
-                    this.showToast(`Created image "${res.data.path}"`, ToastKind.Success);
+                    this.showToast(`${sourceFile ? 'Imported' : 'Created'} image "${res.data.path}"`, ToastKind.Success);
                     await this.invalidateAndRefreshTreeBranch(this.selectedArchiveId, res.data.path);
                     await this.selectAndInspectNode(this.selectedArchiveId, res.data.path, true);
                 } else {
