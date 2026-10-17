@@ -27,13 +27,11 @@ MapleStory Classic World (`mscw`) `.wz` and `.img` repacker, sprite/animation st
 
 ## Building & Running
 
-### Build & Run Tests
-```bash
-dotnet build Maple.Classic.Repacker.sln
-dotnet test Maple.Classic.Repacker.sln
-```
+**Prerequisites:**
+- **.NET 10 SDK**
+- **Node.js & `npm`** (invoked automatically by [`Maple.Classic.Repacker.UI.csproj`](Maple.Classic.Repacker.UI/Maple.Classic.Repacker.UI.csproj) during `dotnet build` / `dotnet publish` to install frontend dependencies and bundle `@codemirror/*` and `@msgpack/msgpack` via [`build-vendor.mjs`](Maple.Classic.Repacker.UI/scripts/build-vendor.mjs))
 
-### Run Desktop / Headless Server
+### Option 1: Run Desktop / Local Web Application (.NET 10)
 ```bash
 # Windows (launches native WebView2 desktop shell by default)
 dotnet run --project Maple.Classic.Repacker.UI/Maple.Classic.Repacker.UI.csproj
@@ -42,9 +40,21 @@ dotnet run --project Maple.Classic.Repacker.UI/Maple.Classic.Repacker.UI.csproj
 dotnet run --project Maple.Classic.Repacker.UI/Maple.Classic.Repacker.UI.csproj -- --headless --urls http://127.0.0.1:5189
 ```
 
-### Run with Electron
+### Option 2: Publish Standalone Windows Executable (`Maple.Classic.Repacker.UI.exe`)
+Publishing embeds all managed libraries (`Maple.Classic.File.IO`, `Maple.Classic.Repacker.Engine`, `MessagePack`, `WebView2`), the native `WebView2Loader.dll` (`Costura.Fody`), and all compiled `wwwroot/` frontend assets into a single portable `Maple.Classic.Repacker.UI.exe`:
+```bash
+dotnet publish Maple.Classic.Repacker.UI/Maple.Classic.Repacker.UI.csproj -c Release -r win-x64 -o dist/win-x64
+```
+
+### Option 3: Run with Electron
 ```bash
 npx electron Maple.Classic.Repacker.UI/obj/ts/electron/main.js
+```
+
+### Build & Run Tests
+```bash
+dotnet build Maple.Classic.Repacker.sln
+dotnet test Maple.Classic.Repacker.sln
 ```
 
 ## Programmatic Engine Usage

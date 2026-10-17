@@ -32,7 +32,7 @@ public class Program {
         var workspace = new RepackerWorkspace();
         var settingsStore = new UserSettingsStore();
 
-        // Load any .wz files or directories passed on the command line, otherwise load sample workspace
+        // Load any .wz files or directories passed on the command line (or sample workspace in Debug builds)
         bool loadedFromArgs = false;
         foreach (string arg in args) {
             if (arg.StartsWith('-')) continue;
@@ -53,9 +53,13 @@ public class Program {
             }
         }
 
+#if DEBUG
         if (!loadedFromArgs) {
             workspace.LoadSampleWorkspace();
         }
+#else
+        _ = loadedFromArgs;
+#endif
 
         builder.Services.AddSingleton(workspace);
         builder.Services.AddSingleton(settingsStore);

@@ -12,6 +12,19 @@ Desktop and web UI for `Maple.Classic.Repacker`, using the same hybrid architect
   - `layout.ts`: Resizable 3-pane + bottom workbench splitter controller.
   - `app.ts`: WZ tree explorer, interactive HTML5 canvas & animation player, `Sound_DX8` waveform player, property inspector, CodeMirror 6 JSON editor, global search, and hex/binary data inspector.
 
+## Building & Publishing
+
+### Run Locally
+```bash
+dotnet run --project Maple.Classic.Repacker.UI.csproj
+```
+
+### Publish Standalone Single-File Executable (`Maple.Classic.Repacker.UI.exe`)
+`Maple.Classic.Repacker.UI.csproj` uses `PublishSingleFile` + `Costura.Fody` (`FodyWeavers.xml`) and embedded manifest resources (`wwwroot/**`) to bundle all managed dependencies, `WebView2Loader.dll`, and compiled TypeScript/CodeMirror assets into a single standalone `.exe`:
+```bash
+dotnet publish Maple.Classic.Repacker.UI.csproj -c Release -r win-x64 -o ../dist/win-x64
+```
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

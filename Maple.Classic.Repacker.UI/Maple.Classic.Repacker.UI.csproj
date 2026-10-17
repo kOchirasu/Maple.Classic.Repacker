@@ -49,6 +49,27 @@
             <_NodeCandidate Include="$(ProgramW6432)\nodejs\node.exe" Condition="'$(ProgramW6432)' != '' and Exists('$(ProgramW6432)\nodejs\node.exe')" />
             <_NodeCandidate Include="$(ProgramFiles)\nodejs\node.exe" Condition="'$(ProgramFiles)' != '' and Exists('$(ProgramFiles)\nodejs\node.exe')" />
             <_NodeCandidate Include="$(LocalAppData)\Programs\nodejs\node.exe" Condition="'$(LocalAppData)' != '' and Exists('$(LocalAppData)\Programs\nodejs\node.exe')" />
+            <_NodeCandidate Include="$(NVM_SYMLINK)\node.exe" Condition="'$(NVM_SYMLINK)' != '' and Exists('$(NVM_SYMLINK)\node.exe')" />
+            <_NodeCandidate Include="$(Volta_Home)\bin\node.exe" Condition="'$(Volta_Home)' != '' and Exists('$(Volta_Home)\bin\node.exe')" />
+            <_NodeCandidate Include="$(LocalAppData)\Volta\bin\node.exe" Condition="'$(LocalAppData)' != '' and Exists('$(LocalAppData)\Volta\bin\node.exe')" />
+            <_NodeCandidate Include="$(LocalAppData)\Microsoft\WinGet\Links\node.exe" Condition="'$(LocalAppData)' != '' and Exists('$(LocalAppData)\Microsoft\WinGet\Links\node.exe')" />
+            <_NodeCandidate Include="$(LocalAppData)\Microsoft\WinGet\Packages\*NodeJS*\*\node.exe" Condition="'$(LocalAppData)' != ''" />
+            <_NodeCandidate Include="$(AppData)\fnm\aliases\default\node.exe" Condition="'$(AppData)' != '' and Exists('$(AppData)\fnm\aliases\default\node.exe')" />
+            <_NodeCandidate Include="$(LocalAppData)\fnm\aliases\default\node.exe" Condition="'$(LocalAppData)' != '' and Exists('$(LocalAppData)\fnm\aliases\default\node.exe')" />
+            <_NodeCandidate Include="$(UserProfile)\.fnm\aliases\default\node.exe" Condition="'$(UserProfile)' != '' and Exists('$(UserProfile)\.fnm\aliases\default\node.exe')" />
+            <_NodeCandidate Include="$(UserProfile)\.local\share\fnm\aliases\default\node.exe" Condition="'$(UserProfile)' != '' and Exists('$(UserProfile)\.local\share\fnm\aliases\default\node.exe')" />
+            <_NodeCandidate Include="$(AppData)\fnm\node-versions\*\installation\node.exe" Condition="'$(AppData)' != ''" />
+            <_NodeCandidate Include="$(LocalAppData)\fnm\node-versions\*\installation\node.exe" Condition="'$(LocalAppData)' != ''" />
+            <_NodeCandidate Include="$(UserProfile)\.fnm\node-versions\*\installation\node.exe" Condition="'$(UserProfile)' != ''" />
+            <_NodeCandidate Include="$(UserProfile)\.local\share\fnm\node-versions\*\installation\node.exe" Condition="'$(UserProfile)' != ''" />
+            <_NodeCandidate Include="$(AppData)\nvm\*\node.exe" Condition="'$(AppData)' != ''" />
+            <_NodeCandidate Include="$(LocalAppData)\nvm\*\node.exe" Condition="'$(LocalAppData)' != ''" />
+            <_NodeCandidate Include="$(NVM_HOME)\*\node.exe" Condition="'$(NVM_HOME)' != ''" />
+            <_NodeCandidate Include="$(UserProfile)\scoop\shims\node.exe" Condition="'$(UserProfile)' != '' and Exists('$(UserProfile)\scoop\shims\node.exe')" />
+            <_NodeCandidate Include="$(UserProfile)\scoop\apps\nodejs*\current\node.exe" Condition="'$(UserProfile)' != ''" />
+            <_NodeCandidate Include="$(ProgramData)\chocolatey\bin\node.exe" Condition="'$(ProgramData)' != '' and Exists('$(ProgramData)\chocolatey\bin\node.exe')" />
+            <_NodeCandidate Include="$(MSBuildProgramFiles32)\nodejs\node.exe" Condition="'$(MSBuildProgramFiles32)' != '' and Exists('$(MSBuildProgramFiles32)\nodejs\node.exe')" />
+            <_NodeCandidate Include="C:\Program Files\Microsoft Visual Studio\*\*\MSBuild\Microsoft\VisualStudio\NodeJs\node.exe" />
         </ItemGroup>
         <ItemGroup Condition="'$(OS)' != 'Windows_NT'">
             <_PathDir Include="$([System.String]::Copy('$(PATH)').Replace('&quot;', '').Split(':', System.StringSplitOptions.RemoveEmptyEntries))" />
@@ -56,6 +77,14 @@
             <_NodeCandidate Include="/usr/local/bin/node" Condition="Exists('/usr/local/bin/node')" />
             <_NodeCandidate Include="/opt/homebrew/bin/node" Condition="Exists('/opt/homebrew/bin/node')" />
             <_NodeCandidate Include="/usr/bin/node" Condition="Exists('/usr/bin/node')" />
+            <_NodeCandidate Include="$(HOME)/.volta/bin/node" Condition="'$(HOME)' != '' and Exists('$(HOME)/.volta/bin/node')" />
+            <_NodeCandidate Include="$(HOME)/.asdf/shims/node" Condition="'$(HOME)' != '' and Exists('$(HOME)/.asdf/shims/node')" />
+            <_NodeCandidate Include="$(HOME)/.local/share/mise/shims/node" Condition="'$(HOME)' != '' and Exists('$(HOME)/.local/share/mise/shims/node')" />
+            <_NodeCandidate Include="$(HOME)/.fnm/aliases/default/bin/node" Condition="'$(HOME)' != '' and Exists('$(HOME)/.fnm/aliases/default/bin/node')" />
+            <_NodeCandidate Include="$(HOME)/.local/share/fnm/aliases/default/bin/node" Condition="'$(HOME)' != '' and Exists('$(HOME)/.local/share/fnm/aliases/default/bin/node')" />
+            <_NodeCandidate Include="$(HOME)/.fnm/node-versions/*/installation/bin/node" Condition="'$(HOME)' != ''" />
+            <_NodeCandidate Include="$(HOME)/.local/share/fnm/node-versions/*/installation/bin/node" Condition="'$(HOME)' != ''" />
+            <_NodeCandidate Include="$(HOME)/.nvm/versions/node/*/bin/node" Condition="'$(HOME)' != ''" />
         </ItemGroup>
         <PropertyGroup>
             <NodeExe Condition="'$(NodeExe)' == '' and Exists('%(_NodeCandidate.Identity)')">%(_NodeCandidate.Identity)</NodeExe>
