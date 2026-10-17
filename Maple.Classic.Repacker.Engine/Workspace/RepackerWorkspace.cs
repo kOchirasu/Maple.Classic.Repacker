@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using Maple.Classic.File.IO;
@@ -5,6 +6,9 @@ using Maple.Classic.Repacker.Engine.Audio;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
 using Maple.Classic.Repacker.Engine.Serialization;
+using static Maple.Classic.Repacker.Engine.Workspace.NodeDtoBuilder;
+using static Maple.Classic.Repacker.Engine.Workspace.WzPropertyPaths;
+using static Maple.Classic.Repacker.Engine.Workspace.WzValueFormatter;
 
 namespace Maple.Classic.Repacker.Engine.Workspace;
 
@@ -12,8 +16,15 @@ namespace Maple.Classic.Repacker.Engine.Workspace;
 /// Central thread-safe workspace engine for inspecting, editing, searching, and repacking
 /// MapleStory Classic World (<c>.wz</c> and <c>.img</c>) archives.
 /// </summary>
+/// <remarks>
+/// Threading convention: every public member acquires <see cref="syncLock"/> before touching shared state
+/// (<see cref="archives"/>, <see cref="logs"/>, <see cref="clipboard"/>, selection). Private members suffixed with
+/// <c>Unsafe</c> do NOT acquire the lock themselves; they must only be called while the caller already holds
+/// <see cref="syncLock"/>. This lets a public operation perform several steps atomically without re-entering the lock.
+/// Each <c>Unsafe</c> member calls <see cref="AssertLockHeld"/> so violations fail fast in Debug builds.
+/// </remarks>
 public sealed class RepackerWorkspace : IDisposable {
-    private const int MaxLogEntries = 300;
+    private const int MaxLogEntries = 1000;
 
     private readonly Lock syncLock = new();
     private readonly List<ArchiveSession> archives = [];
@@ -48,7 +59,18 @@ public sealed class RepackerWorkspace : IDisposable {
         NotifyStateChanged();
     }
 
+    /// <summary>
+    /// Debug-only guard used by every <c>...Unsafe</c> member to verify the caller already holds <see cref="syncLock"/>.
+    /// Compiled out of Release builds.
+    /// </summary>
+    [Conditional("DEBUG")]
+    private void AssertLockHeld([System.Runtime.CompilerServices.CallerMemberName] string caller = "") {
+        Debug.Assert(syncLock.IsHeldByCurrentThread, $"{caller} must be called while holding {nameof(syncLock)}.");
+    }
+
+    /// <summary>Appends a log entry. Caller must hold <see cref="syncLock"/>.</summary>
     private void AppendLogUnsafe(string message, RepackerLogLevel level = RepackerLogLevel.Info) {
+        AssertLockHeld();
         var entry = new RepackerLogEntry(
             nextLogId++,
             DateTime.Now.ToString("HH:mm:ss.fff", CultureInfo.InvariantCulture),
@@ -110,7 +132,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
     public ArchiveSummaryDto OpenArchiveFromFile(string filePath, ushort? version = null) {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        string fullPath = ResolvePreferredRootArchivePathOnDisk(Path.GetFullPath(filePath));
+        string fullPath = ArchivePathResolver.ResolvePreferredRootArchivePathOnDisk(Path.GetFullPath(filePath));
         var wz = new WzArchive(fullPath, version);
         string fileName = Path.GetFileName(fullPath);
 
@@ -118,7 +140,7 @@ public sealed class RepackerWorkspace : IDisposable {
             ArchiveSession? existing = FindExistingOrLinkedSessionByPathUnsafe(fullPath);
             if (existing is not null) {
                 int idx = archives.IndexOf(existing);
-                string reloadPath = ChoosePreferredRootArchivePath(existing.FilePath, fullPath);
+                string reloadPath = ArchivePathResolver.ChoosePreferredRootArchivePath(existing.FilePath, fullPath);
                 string reloadName = Path.GetFileName(reloadPath);
                 WzArchive reloadWz = string.Equals(reloadPath, fullPath, StringComparison.OrdinalIgnoreCase)
                     ? wz
@@ -188,9 +210,9 @@ public sealed class RepackerWorkspace : IDisposable {
         lock (syncLock) {
             string resolvedPath = !string.IsNullOrWhiteSpace(filePath)
                 ? filePath.Trim()
-                : TryResolveDiskPathUnsafe(cleanName, data.Length, hintPaths) ?? string.Empty;
+                : ArchivePathResolver.TryResolveDiskPath(archives.Select(static a => a.FilePath), cleanName, data.Length, hintPaths) ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(resolvedPath)) {
-                string preferredPath = ResolvePreferredRootArchivePathOnDisk(resolvedPath);
+                string preferredPath = ArchivePathResolver.ResolvePreferredRootArchivePathOnDisk(resolvedPath);
                 if (!string.Equals(preferredPath, resolvedPath, StringComparison.OrdinalIgnoreCase) &&
                     System.IO.File.Exists(preferredPath)) {
                     wz.Dispose();
@@ -213,7 +235,7 @@ public sealed class RepackerWorkspace : IDisposable {
             if (existing is not null) {
                 int idx = archives.IndexOf(existing);
                 string reloadPath = !string.IsNullOrWhiteSpace(resolvedPath)
-                    ? ChoosePreferredRootArchivePath(existing.FilePath, resolvedPath)
+                    ? ArchivePathResolver.ChoosePreferredRootArchivePath(existing.FilePath, resolvedPath)
                     : string.Empty;
                 string reloadName = !string.IsNullOrWhiteSpace(reloadPath)
                     ? Path.GetFileName(reloadPath)
@@ -251,14 +273,24 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
+    /// <summary>
+    /// Finds the open session whose root file is <paramref name="fullPath"/> or that already links it (as a shard or
+    /// subdirectory archive). Caller must hold <see cref="syncLock"/>.
+    /// </summary>
     private ArchiveSession? FindExistingOrLinkedSessionByPathUnsafe(string fullPath) {
+        AssertLockHeld();
         return archives.Find(a =>
             (!string.IsNullOrEmpty(a.FilePath) &&
              string.Equals(a.FilePath, fullPath, StringComparison.OrdinalIgnoreCase)) ||
             a.HasLinkedOrSubdirectoryFile(fullPath));
     }
 
+    /// <summary>
+    /// Disposes and removes every other open session whose file is now linked by <paramref name="primary"/>.
+    /// Caller must hold <see cref="syncLock"/>.
+    /// </summary>
     private void RemoveSubsumedSessionsUnsafe(ArchiveSession primary, int primaryIdx) {
+        AssertLockHeld();
         for (int i = archives.Count - 1; i >= 0; i--) {
             if (i == primaryIdx) {
                 continue;
@@ -271,123 +303,6 @@ public sealed class RepackerWorkspace : IDisposable {
         }
     }
 
-    private static string ResolvePreferredRootArchivePathOnDisk(string fullPath) {
-        try {
-            string? dir = Path.GetDirectoryName(fullPath);
-            string stem = Path.GetFileNameWithoutExtension(fullPath);
-            string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
-            if (!string.IsNullOrEmpty(dir) &&
-                !string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) &&
-                !baseStem.EndsWith("_Canvas", StringComparison.OrdinalIgnoreCase)) {
-                string rootCandidate = Path.Combine(dir, $"{baseStem}.wz");
-                if (System.IO.File.Exists(rootCandidate)) {
-                    return Path.GetFullPath(rootCandidate);
-                }
-            }
-        } catch {
-            // Fall back to original path
-        }
-        return fullPath;
-    }
-
-    private static string ChoosePreferredRootArchivePath(string existingPath, string requestedPath) {
-        if (string.IsNullOrWhiteSpace(existingPath) || !System.IO.File.Exists(existingPath)) {
-            return requestedPath;
-        }
-        try {
-            string existingFull = Path.GetFullPath(existingPath);
-            string requestedFull = Path.GetFullPath(requestedPath);
-            if (string.Equals(existingFull, requestedFull, StringComparison.OrdinalIgnoreCase)) {
-                return requestedFull;
-            }
-
-            string? existingDir = Path.GetDirectoryName(existingFull);
-            string? requestedDir = Path.GetDirectoryName(requestedFull);
-            if (!string.IsNullOrEmpty(existingDir) && !string.IsNullOrEmpty(requestedDir)) {
-                string normExistingDir = Path.TrimEndingDirectorySeparator(existingDir);
-                string normRequestedDir = Path.TrimEndingDirectorySeparator(requestedDir);
-
-                // If existing is in a parent directory of requested (e.g., Item.wz vs Cash/Cash_000.wz), keep existing root
-                if (normRequestedDir.StartsWith(normExistingDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) {
-                    return existingFull;
-                }
-
-                // If both are in the same directory (e.g., Item.wz vs Item_000.wz), prefer the un-numbered base .wz file
-                if (string.Equals(normExistingDir, normRequestedDir, StringComparison.OrdinalIgnoreCase)) {
-                    string existingStem = Path.GetFileNameWithoutExtension(existingFull);
-                    string existingBase = ArchiveSession.StripNumericShardSuffix(existingStem);
-                    if (string.Equals(existingStem, existingBase, StringComparison.OrdinalIgnoreCase) &&
-                        !existingStem.EndsWith("_Canvas", StringComparison.OrdinalIgnoreCase)) {
-                        return existingFull;
-                    }
-                }
-            }
-        } catch {
-            // Fall back to requested path
-        }
-        return requestedPath;
-    }
-
-    private string? TryResolveDiskPathUnsafe(string cleanName, int byteLength, IEnumerable<string>? hintPaths) {
-        string baseStem = ArchiveSession.StripNumericShardSuffix(Path.GetFileNameWithoutExtension(cleanName));
-        var candidateDirs = new List<string>();
-        var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        void AddDirAndParent(string? pathOrDir) {
-            if (string.IsNullOrWhiteSpace(pathOrDir)) {
-                return;
-            }
-            try {
-                string full = Path.GetFullPath(pathOrDir.Trim());
-                string? dir = Directory.Exists(full) ? full : Path.GetDirectoryName(full);
-                if (!string.IsNullOrEmpty(dir) && Directory.Exists(dir) && seenDirs.Add(dir)) {
-                    candidateDirs.Add(dir);
-                    string? parent = Path.GetDirectoryName(dir);
-                    if (!string.IsNullOrEmpty(parent) && Directory.Exists(parent) && seenDirs.Add(parent)) {
-                        candidateDirs.Add(parent);
-                    }
-                }
-            } catch {
-                // Ignore invalid paths
-            }
-        }
-
-        foreach (ArchiveSession a in archives) {
-            AddDirAndParent(a.FilePath);
-        }
-        if (hintPaths is not null) {
-            foreach (string h in hintPaths) {
-                AddDirAndParent(h);
-            }
-        }
-        AddDirAndParent(Environment.GetEnvironmentVariable("MSCW_DATA_FOLDER"));
-        AddDirAndParent(@"C:\Nexon\Library\maplestorycw\appdata\Data");
-        AddDirAndParent(@"C:\Nexon\MapleStory\Data");
-
-        string? sizeFallbackMatch = null;
-        foreach (string dir in candidateDirs) {
-            string[] candidates = [
-                Path.Combine(dir, cleanName),
-                Path.Combine(dir, baseStem, cleanName),
-            ];
-            foreach (string candidate in candidates) {
-                try {
-                    var fi = new FileInfo(candidate);
-                    if (fi.Exists) {
-                        if (fi.Length == byteLength) {
-                            return fi.FullName;
-                        }
-                        sizeFallbackMatch ??= fi.FullName;
-                    }
-                } catch {
-                    // Ignore IO errors
-                }
-            }
-        }
-
-        return sizeFallbackMatch;
-    }
-
     public ArchiveSummaryDto[] OpenDataDirectory(string directoryPath, ushort? version = null) {
         ArgumentException.ThrowIfNullOrWhiteSpace(directoryPath);
         string fullDir = Path.GetFullPath(directoryPath);
@@ -395,20 +310,7 @@ public sealed class RepackerWorkspace : IDisposable {
             throw new DirectoryNotFoundException($"Directory not found: {fullDir}");
         }
 
-        string[] wzFiles = Directory.GetFiles(fullDir, "*.wz", SearchOption.AllDirectories)
-            .OrderBy(static p => p.Count(static c => c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar))
-            .ThenBy(static p => {
-                string stem = Path.GetFileNameWithoutExtension(p);
-                string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
-                return string.Equals(stem, baseStem, StringComparison.OrdinalIgnoreCase) ? 0 : 1;
-            })
-            .ThenBy(static p => {
-                string stem = Path.GetFileNameWithoutExtension(p);
-                string baseStem = ArchiveSession.StripNumericShardSuffix(stem);
-                return string.Equals(baseStem, "Base", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
-            })
-            .ThenBy(static p => p, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
+        string[] wzFiles = ArchivePathResolver.GetOrderedDataDirectoryWzFiles(fullDir);
 
         var openedIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (string wzPath in wzFiles) {
@@ -839,13 +741,13 @@ public sealed class RepackerWorkspace : IDisposable {
                 // Canvas preview (if target or UOL target is a Canvas)
                 CanvasPreviewDto? canvasDto = null;
                 if (effectiveVisualTarget is WzValue.Canvas canvasVal) {
-                    canvasDto = BuildCanvasPreviewUnsafe(session, imgPath, imgRoot, canvasVal);
+                    canvasDto = CanvasLinkResolver.BuildCanvasPreview(archives, session, imgPath, imgRoot, canvasVal);
                 }
 
                 // Animation frames (if target is an animation container OR a frame inside an animation container)
                 AnimationFrameDto[] animFrames = [];
                 if (includeAnimation) {
-                    animFrames = ExtractAnimationFramesUnsafe(session, imgPath, imgRoot, effectiveSubPath, effectiveVisualTarget);
+                    animFrames = CanvasLinkResolver.ExtractAnimationFrames(archives, session, imgPath, imgRoot, effectiveSubPath, effectiveVisualTarget);
                     // If user clicked an animation folder (like stand1) and canvasDto is null, populate canvasDto from frame 0
                     if (canvasDto is null && animFrames.Length > 0) {
                         AnimationFrameDto f0 = animFrames[0];
@@ -899,7 +801,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         }
 
                         if (childVal is WzValue.Canvas childCanvas) {
-                            canvasDto = BuildCanvasPreviewUnsafe(session, imgPath, imgRoot, childCanvas);
+                            canvasDto = CanvasLinkResolver.BuildCanvasPreview(archives, session, imgPath, imgRoot, childCanvas);
                             break;
                         }
                         if (childVal is WzValue.Sound childSound) {
@@ -1820,7 +1722,7 @@ public sealed class RepackerWorkspace : IDisposable {
                         return (false, $"Node \"{norm}\" not found.", 0);
                     }
                     session.RecordUndoSnapshot(imgPath);
-                    totalInlined = InlineLinksRecursiveUnsafe(session, imgRoot, target);
+                    totalInlined = CanvasLinkResolver.InlineLinksRecursive(archives, session, imgRoot, target);
                     if (totalInlined > 0) {
                         session.MarkImageModified(imgPath);
                     }
@@ -1840,7 +1742,7 @@ public sealed class RepackerWorkspace : IDisposable {
                                 WalkDir(c, full);
                             } else if (c.IsImage) {
                                 WzValue root = session.GetOrParseImage(full);
-                                int count = InlineLinksRecursiveUnsafe(session, root, root);
+                                int count = CanvasLinkResolver.InlineLinksRecursive(archives, session, root, root);
                                 if (count > 0) {
                                     session.MarkImageModified(full);
                                     totalInlined += count;
@@ -1919,7 +1821,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
             foreach (ArchiveSession session in targetSessions) {
                 if (results.Count >= maxResults) break;
-                SearchDirectoryUnsafe(session, session.VirtualRoot, "", nameFilter, valFilter, query.PropertyKindFilter, query.ExactMatch, cmp, maxResults, results);
+                WorkspaceSearch.SearchDirectory(session, session.VirtualRoot, "", nameFilter, valFilter, query.PropertyKindFilter, query.ExactMatch, cmp, maxResults, results);
             }
         }
 
@@ -1980,7 +1882,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
 
                 if (target is WzValue.Canvas canvas && format is RepackerExportFormat.Png or RepackerExportFormat.Auto) {
-                    CanvasPreviewDto preview = BuildCanvasPreviewUnsafe(session, imgPath, imgRoot, canvas);
+                    CanvasPreviewDto preview = CanvasLinkResolver.BuildCanvasPreview(archives, session, imgPath, imgRoot, canvas);
                     return (true, null, $"{baseName}.png", "image/png", preview.PngBytes);
                 }
 
@@ -2054,7 +1956,7 @@ public sealed class RepackerWorkspace : IDisposable {
 
                     void WalkProperties(WzValue node, string propPrefix) {
                         if (node is WzValue.Canvas canvas && mode is RepackerBatchExportMode.Png or RepackerBatchExportMode.All) {
-                            CanvasPreviewDto preview = BuildCanvasPreviewUnsafe(session, currentImgPath, imgRoot, canvas);
+                            CanvasPreviewDto preview = CanvasLinkResolver.BuildCanvasPreview(archives, session, currentImgPath, imgRoot, canvas);
                             string safeRel = string.IsNullOrEmpty(propPrefix) ? "canvas" : propPrefix.Replace('/', Path.DirectorySeparatorChar);
                             string destFile = Path.Combine(imgRelDir, $"{safeRel}.png");
                             Directory.CreateDirectory(Path.GetDirectoryName(destFile) ?? imgRelDir);
@@ -2115,748 +2017,20 @@ public sealed class RepackerWorkspace : IDisposable {
     }
 
     // -------------------------------------------------------------------------
-    // Internal Helpers (Link Resolution, Animations, Search, Cloning)
+    // Internal Helpers
     // -------------------------------------------------------------------------
 
+    /// <summary>
+    /// Looks up an open session by id (or the first session when <paramref name="archiveId"/> is empty).
+    /// Caller must hold <see cref="syncLock"/>.
+    /// </summary>
     private ArchiveSession? FindSessionUnsafe(string? archiveId) {
+        AssertLockHeld();
         if (string.IsNullOrWhiteSpace(archiveId)) {
             return archives.FirstOrDefault();
         }
         return archives.Find(a => a.ArchiveId == archiveId);
     }
-
-    private CanvasPreviewDto BuildCanvasPreviewUnsafe(
-        ArchiveSession session,
-        string imgPath,
-        WzValue imgRoot,
-        WzValue.Canvas canvas) {
-        string? inlink = canvas["_inlink"]?.AsString();
-        string? outlink = canvas["_outlink"]?.AsString();
-        string? zLayer = canvas["z"]?.AsString() ?? (canvas["z"]?.AsInt() is { } zi ? zi.ToString(CultureInfo.InvariantCulture) : null);
-        int delayMs = canvas["delay"]?.AsInt() ?? 100;
-        VectorPointDto origin = canvas["origin"] is WzValue.Vector(var ox, var oy) ? new VectorPointDto(ox, oy) : new VectorPointDto(0, 0);
-        VectorPointDto? lt = canvas["lt"] is WzValue.Vector(var ltx, var lty) ? new VectorPointDto(ltx, lty) : null;
-        VectorPointDto? rb = canvas["rb"] is WzValue.Vector(var rbx, var rby) ? new VectorPointDto(rbx, rby) : null;
-        VectorPointDto? head = canvas["head"] is WzValue.Vector(var hx, var hy) ? new VectorPointDto(hx, hy) : null;
-
-        WzValue.Canvas visualCanvas = canvas;
-        string? resolvedLinkPath = null;
-        bool isLinkStub = (!string.IsNullOrEmpty(inlink) || !string.IsNullOrEmpty(outlink)) && canvas.Width <= 1 && canvas.Height <= 1;
-
-        if (!string.IsNullOrEmpty(inlink)) {
-            if (ResolvePropertyNode(imgRoot, inlink) is WzValue.Canvas inCanvas) {
-                visualCanvas = inCanvas;
-                resolvedLinkPath = $"{imgPath}/{inlink}";
-            }
-        } else if (!string.IsNullOrEmpty(outlink)) {
-            (WzValue.Canvas? outCanvas, string? outResolved) = ResolveOutlinkCanvasUnsafe(session, outlink);
-            if (outCanvas is not null) {
-                visualCanvas = outCanvas;
-                resolvedLinkPath = outResolved;
-            }
-        }
-
-        byte[] pngBytes = WzCanvasCodec.DecodeToPng(visualCanvas);
-        WzCanvasFormat canvasFormat = WzCanvasFormatExtensions.FromFormatCode(visualCanvas.Format);
-        return new CanvasPreviewDto(
-            visualCanvas.Width,
-            visualCanvas.Height,
-            canvasFormat,
-            canvasFormat.GetDisplayName(),
-            visualCanvas.Payload.Length,
-            pngBytes,
-            origin,
-            lt,
-            rb,
-            head,
-            delayMs,
-            zLayer,
-            inlink,
-            outlink,
-            resolvedLinkPath,
-            isLinkStub);
-    }
-
-    private (WzValue.Canvas? Canvas, string? ResolvedDesc) ResolveOutlinkCanvasUnsafe(ArchiveSession currentSession, string outlink) {
-        (string? targetImgPart, string innerSubPath) = ArchiveSession.SplitImageAndSubPath(outlink);
-        if (targetImgPart is null || string.IsNullOrEmpty(innerSubPath)) {
-            return (null, null);
-        }
-
-        // Build candidate .img paths by progressively stripping leading directory segments
-        // (e.g., "Character/Coat/_Canvas/01040000.img" -> "Character/Coat/_Canvas/01040000.img",
-        // "Coat/_Canvas/01040000.img", "_Canvas/01040000.img", "01040000.img")
-        // as well as "_Canvas" variants when "_Canvas" is not already present.
-        var candidateImgPaths = new List<string>(8);
-        void AddCandidate(string p) {
-            if (!string.IsNullOrEmpty(p) && !candidateImgPaths.Contains(p, StringComparer.OrdinalIgnoreCase)) {
-                candidateImgPaths.Add(p);
-            }
-        }
-
-        string[] segments = targetImgPart.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        for (int i = 0; i < segments.Length; i++) {
-            string sub = string.Join('/', segments[i..]);
-            AddCandidate(sub);
-            if (i < segments.Length - 1 && !string.Equals(segments[^2], "_Canvas", StringComparison.OrdinalIgnoreCase)) {
-                string withCanvas = string.Join('/', [.. segments[i..^1], "_Canvas", segments[^1]]);
-                AddCandidate(withCanvas);
-            }
-        }
-        if (segments.Length >= 1) {
-            AddCandidate($"_Canvas/{segments[^1]}");
-        }
-
-        // Check currentSession first, then all other open ArchiveSessions
-        var orderedSessions = new List<ArchiveSession>(archives.Count) { currentSession };
-        foreach (ArchiveSession s in archives) {
-            if (!ReferenceEquals(s, currentSession)) {
-                orderedSessions.Add(s);
-            }
-        }
-
-        foreach (ArchiveSession candidate in orderedSessions) {
-            foreach (string tryImgPath in candidateImgPaths) {
-                VirtualFsNode? vNode = candidate.ResolveVirtualNode(tryImgPath);
-                if (vNode is { IsImage: true }) {
-                    try {
-                        WzValue parsed = candidate.GetOrParseImage(tryImgPath);
-                        if (ResolvePropertyNode(parsed, innerSubPath) is WzValue.Canvas found &&
-                            !(found.Width <= 1 && found.Height <= 1 && found["_outlink"] is not null)) {
-                            return (found, $"{candidate.Name}:{tryImgPath}/{innerSubPath}");
-                        }
-                    } catch {
-                        // Ignore and keep searching
-                    }
-                }
-            }
-        }
-
-        return (null, null);
-    }
-
-    private int InlineLinksRecursiveUnsafe(ArchiveSession session, WzValue imgRoot, WzValue node) {
-        int count = 0;
-        if (node is WzValue.Canvas canvas) {
-            string? inlink = canvas["_inlink"]?.AsString();
-            string? outlink = canvas["_outlink"]?.AsString();
-            WzValue.Canvas? resolved = null;
-
-            if (!string.IsNullOrEmpty(inlink)) {
-                resolved = ResolvePropertyNode(imgRoot, inlink) as WzValue.Canvas;
-            } else if (!string.IsNullOrEmpty(outlink)) {
-                (resolved, _) = ResolveOutlinkCanvasUnsafe(session, outlink);
-            }
-
-            if (resolved is not null) {
-                canvas.Width = resolved.Width;
-                canvas.Height = resolved.Height;
-                canvas.Format = resolved.Format;
-                canvas.Payload = resolved.Payload;
-                canvas.Properties.RemoveAll(static p => p.Name is "_inlink" or "_outlink");
-                count++;
-            }
-        }
-
-        IReadOnlyList<WzProperty>? kids = node.Children;
-        if (kids is not null) {
-            for (int i = 0; i < kids.Count; i++) {
-                count += InlineLinksRecursiveUnsafe(session, imgRoot, kids[i].Value);
-            }
-        }
-        return count;
-    }
-
-    private AnimationFrameDto[] ExtractAnimationFramesUnsafe(
-        ArchiveSession session,
-        string imgPath,
-        WzValue imgRoot,
-        string subPath,
-        WzValue selectedValue) {
-        // Only extract animation frames when the parent container node of numbered frames ("0", "1", ...) is selected
-        if (selectedValue is not WzValue.Object || !HasNumberedFrameChildren(selectedValue) || selectedValue.Children is null) {
-            return [];
-        }
-        WzValue animContainer = selectedValue;
-        string containerSubPath = subPath;
-
-        var numberedProps = new List<(int Index, WzProperty Prop)>();
-        foreach (WzProperty prop in animContainer.Children) {
-            if (int.TryParse(prop.Name, out int frameIdx) && frameIdx >= 0) {
-                numberedProps.Add((frameIdx, prop));
-            }
-        }
-        numberedProps.Sort(static (a, b) => a.Index.CompareTo(b.Index));
-
-        var frames = new List<AnimationFrameDto>(numberedProps.Count);
-        foreach ((int idx, WzProperty prop) in numberedProps) {
-            string frameSubPath = string.IsNullOrEmpty(containerSubPath) ? prop.Name : $"{containerSubPath}/{prop.Name}";
-            WzValue frameVal = prop.Value;
-            if (frameVal is WzValue.Uol(var uolStr)) {
-                (WzValue? resolved, _) = ResolveUolTarget(imgRoot, frameSubPath, uolStr);
-                if (resolved is not null) {
-                    frameVal = resolved;
-                }
-            }
-
-            WzValue.Canvas? frameCanvas = frameVal as WzValue.Canvas;
-            int? overrideDelay = null;
-            if (frameCanvas is null && frameVal is WzValue.Object frameObj && frameObj.Children is not null) {
-                // Character equipment frame object (e.g. stand1/0/mail)
-                overrideDelay = frameObj["delay"]?.AsInt();
-                foreach (WzProperty sub in frameObj.Children) {
-                    WzValue subVal = sub.Value;
-                    if (subVal is WzValue.Uol(var subUol)) {
-                        (WzValue? resSub, _) = ResolveUolTarget(imgRoot, $"{frameSubPath}/{sub.Name}", subUol);
-                        if (resSub is not null) subVal = resSub;
-                    }
-                    if (subVal is WzValue.Canvas c) {
-                        frameCanvas = c;
-                        break;
-                    }
-                }
-            }
-
-            if (frameCanvas is null) {
-                continue;
-            }
-
-            CanvasPreviewDto preview = BuildCanvasPreviewUnsafe(session, imgPath, imgRoot, frameCanvas);
-            int delay = overrideDelay ?? preview.DelayMs;
-            int a0 = frameCanvas["a0"]?.AsInt() ?? 255;
-            int a1 = frameCanvas["a1"]?.AsInt() ?? 255;
-
-            frames.Add(new AnimationFrameDto(
-                idx,
-                prop.Name,
-                $"{imgPath}/{frameSubPath}",
-                preview.Width,
-                preview.Height,
-                preview.Format,
-                Math.Max(30, delay),
-                preview.Origin,
-                preview.Lt,
-                preview.Rb,
-                preview.Head,
-                a0,
-                a1,
-                preview.PngBytes));
-        }
-
-        return frames.Count > 1 ? [.. frames] : [];
-    }
-
-    private static bool HasNumberedFrameChildren(WzValue val) {
-        if (val.Children is null || val.Children.Count == 0) {
-            return false;
-        }
-        foreach (WzProperty p in val.Children) {
-            if (p.Name == "0") {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    public static (WzValue? Target, string? ResolvedSubPath) ResolveUolTarget(WzValue imgRoot, string uolNodeSubPath, string uolExpression) {
-        // UOL is relative to the parent of the UOL property
-        int lastSlash = uolNodeSubPath.LastIndexOf('/');
-        string parentSubPath = lastSlash >= 0 ? uolNodeSubPath[..lastSlash] : string.Empty;
-
-        var segments = new List<string>();
-        if (!string.IsNullOrEmpty(parentSubPath)) {
-            segments.AddRange(parentSubPath.Split('/', StringSplitOptions.RemoveEmptyEntries));
-        }
-
-        foreach (string part in uolExpression.Split('/', StringSplitOptions.RemoveEmptyEntries)) {
-            if (part == ".") {
-                continue;
-            }
-            if (part == "..") {
-                if (segments.Count > 0) {
-                    segments.RemoveAt(segments.Count - 1);
-                }
-            } else {
-                segments.Add(part);
-            }
-        }
-
-        string targetSubPath = string.Join('/', segments);
-        WzValue? resolved = ResolvePropertyNode(imgRoot, targetSubPath);
-        return (resolved, resolved is not null ? targetSubPath : null);
-    }
-
-    public static WzValue? ResolvePropertyNode(WzValue root, ReadOnlySpan<char> subPath) {
-        subPath = subPath.Trim('/');
-        if (subPath.IsEmpty) {
-            return root;
-        }
-
-        WzValue cur = root;
-        foreach (Range range in subPath.Split('/')) {
-            ReadOnlySpan<char> part = subPath[range];
-            if (part.IsEmpty) {
-                continue;
-            }
-
-            if (cur is WzValue.Convex(var items)) {
-                if (int.TryParse(part, out int idx) && idx >= 0 && idx < items.Count) {
-                    cur = items[idx];
-                    continue;
-                }
-                return null;
-            }
-
-            IReadOnlyList<WzProperty>? kids = cur.Children;
-            if (kids is null) {
-                return null;
-            }
-
-            WzValue? next = null;
-            foreach (WzProperty prop in kids) {
-                if (prop.Name.AsSpan().SequenceEqual(part)) {
-                    next = prop.Value;
-                    break;
-                }
-            }
-            if (next is null) {
-                return null;
-            }
-            cur = next;
-        }
-        return cur;
-    }
-
-    private static bool TryReplacePropertyNode(WzValue imgRoot, string subPath, WzValue newValue) {
-        subPath = subPath.Trim('/');
-        if (string.IsNullOrEmpty(subPath)) {
-            return false;
-        }
-
-        int lastSlash = subPath.LastIndexOf('/');
-        string parentSubPath = lastSlash >= 0 ? subPath[..lastSlash] : string.Empty;
-        string leafName = lastSlash >= 0 ? subPath[(lastSlash + 1)..] : subPath;
-
-        WzValue? parent = string.IsNullOrEmpty(parentSubPath) ? imgRoot : ResolvePropertyNode(imgRoot, parentSubPath);
-        if (parent is WzValue.Convex(var items) && int.TryParse(leafName, out int cIdx) && cIdx >= 0 && cIdx < items.Count) {
-            items[cIdx] = newValue;
-            return true;
-        }
-
-        List<WzProperty>? kids = GetMutablePropertyList(parent);
-        if (kids is null) {
-            return false;
-        }
-
-        for (int i = 0; i < kids.Count; i++) {
-            if (kids[i].Name == leafName) {
-                kids[i] = kids[i] with { Value = newValue };
-                return true;
-            }
-        }
-        kids.Add(new WzProperty(leafName, newValue));
-        return true;
-    }
-
-    private static List<WzProperty>? GetMutablePropertyList(WzValue? val) => val switch {
-        WzValue.Object(var props) => props,
-        WzValue.Canvas { Properties: var props } => props,
-        _ => null,
-    };
-
-    private static WzValue CloneWzValue(WzValue v) {
-        var wrapper = new WzValue.Object([new WzProperty("_", v)]);
-        WzValue parsed = WzValue.Parse(wrapper.ToBytes());
-        return parsed.Children is { Count: > 0 } ? parsed.Children[0].Value : parsed;
-    }
-
-    private static WzValue CreatePrimitiveOrStructuredValue(
-        RepackerPropertyKind kind,
-        string? rawValue,
-        int? vecX,
-        int? vecY,
-        WzValue? existing) {
-        string text = rawValue ?? string.Empty;
-        return kind switch {
-            RepackerPropertyKind.Null => WzValue.Null.Instance,
-            RepackerPropertyKind.Short => new WzValue.Short(short.TryParse(text, CultureInfo.InvariantCulture, out short s) ? s : (short) 0),
-            RepackerPropertyKind.Int => new WzValue.Int(int.TryParse(text, CultureInfo.InvariantCulture, out int i) ? i : 0),
-            RepackerPropertyKind.Long => new WzValue.Long(long.TryParse(text, CultureInfo.InvariantCulture, out long l) ? l : 0L),
-            RepackerPropertyKind.Float => new WzValue.Float(float.TryParse(text, CultureInfo.InvariantCulture, out float f) ? f : 0f),
-            RepackerPropertyKind.Double => new WzValue.Double(double.TryParse(text, CultureInfo.InvariantCulture, out double d) ? d : 0.0),
-            RepackerPropertyKind.String => new WzValue.String(text),
-            RepackerPropertyKind.Uol => new WzValue.Uol(text),
-            RepackerPropertyKind.Vector => new WzValue.Vector(vecX ?? 0, vecY ?? 0),
-            RepackerPropertyKind.Object => existing is WzValue.Object existingObj ? existingObj : new WzValue.Object(),
-            RepackerPropertyKind.Convex => existing is WzValue.Convex existingConv ? existingConv : new WzValue.Convex(),
-            _ => new WzValue.String(text),
-        };
-    }
-
-    private static RepackerChangeState EvaluatePropertyChangeState(
-        ArchiveSession session,
-        string imgPath,
-        string propSubPath,
-        WzValue propVal,
-        bool isDeleted = false) {
-        if (isDeleted) {
-            return RepackerChangeState.Deleted;
-        }
-        if (session.IsImageAdded(imgPath)) {
-            return RepackerChangeState.Added;
-        }
-        if (!session.IsImageModified(imgPath)) {
-            return RepackerChangeState.Unchanged;
-        }
-        if (!session.TryGetBaselineImage(imgPath, out WzValue? baselineRoot) || baselineRoot is null) {
-            return RepackerChangeState.Modified;
-        }
-        if (string.IsNullOrEmpty(propSubPath)) {
-            return !propVal.Equals(baselineRoot) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
-        }
-        WzValue? origProp = ResolvePropertyNode(baselineRoot, propSubPath);
-        if (origProp is null) {
-            return RepackerChangeState.Added;
-        }
-        return !propVal.Equals(origProp) ? RepackerChangeState.Modified : RepackerChangeState.Unchanged;
-    }
-
-    private static List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> BuildMergedChildProperties(
-        ArchiveSession session,
-        string imgPath,
-        string parentSubPath,
-        WzValue target,
-        bool parentDeleted) {
-        var list = new List<(string Name, string SubPath, WzValue Value, bool IsDeleted)>();
-        IReadOnlyList<WzProperty>? props = target.Children;
-        if (props is not null) {
-            foreach (WzProperty prop in props) {
-                string propSubPath = string.IsNullOrEmpty(parentSubPath) ? prop.Name : $"{parentSubPath}/{prop.Name}";
-                list.Add((prop.Name, propSubPath, prop.Value, parentDeleted));
-            }
-        }
-
-        IReadOnlyList<DeletedPropertyEntry> deletedProps = session.GetDeletedDirectChildProperties(imgPath, parentSubPath);
-        foreach (DeletedPropertyEntry del in deletedProps) {
-            if (list.Any(item => string.Equals(item.Name, del.Name, StringComparison.Ordinal))) {
-                continue;
-            }
-            int insertIdx = Math.Clamp(del.OriginalIndex, 0, list.Count);
-            list.Insert(insertIdx, (del.Name, del.SubPath, del.Value, true));
-        }
-
-        return list;
-    }
-
-    private static TreeNodeDto BuildPropertyTreeNodeDto(
-        ArchiveSession session,
-        string imgPath,
-        string propSubPath,
-        string path,
-        string name,
-        WzValue val,
-        RepackerChangeState changeState = RepackerChangeState.Unchanged) {
-        (RepackerPropertyKind kind, string badge, string display) = DescribeWzValue(val);
-        int liveChildCount = val switch {
-            WzValue.Object(var p) => p.Count,
-            WzValue.Canvas c => c.Properties.Count,
-            WzValue.Convex(var items) => items.Count,
-            _ => 0,
-        };
-        int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, propSubPath).Count;
-        int childCount = liveChildCount + deletedChildCount;
-        int sizeBytes = val switch {
-            WzValue.Canvas c => c.Payload.Length,
-            WzValue.Sound s => s.DataLength,
-            WzValue.RawData r => r.DataLength,
-            _ => 0,
-        };
-
-        return new TreeNodeDto(
-            session.ArchiveId,
-            path,
-            name,
-            RepackerNodeKind.Property,
-            kind,
-            display,
-            badge,
-            childCount > 0,
-            childCount,
-            changeState,
-            sizeBytes);
-    }
-
-    private static SubPropertyRowDto[] BuildChildRows(
-        ArchiveSession session,
-        string imgPath,
-        string subPath,
-        WzValue target,
-        bool parentDeleted = false) {
-        if (target is WzValue.Convex(var items)) {
-            var rows = new SubPropertyRowDto[items.Count];
-            for (int i = 0; i < items.Count; i++) {
-                string itemName = i.ToString(CultureInfo.InvariantCulture);
-                string itemSubPath = string.IsNullOrEmpty(subPath) ? itemName : $"{subPath}/{itemName}";
-                string itemPath = $"{imgPath}/{itemSubPath}";
-                (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(items[i]);
-                RepackerChangeState itemState = EvaluatePropertyChangeState(session, imgPath, itemSubPath, items[i], parentDeleted);
-                rows[i] = new SubPropertyRowDto(itemName, itemPath, RepackerNodeKind.Property, pk, badge, disp, 0, 0, itemState);
-            }
-            return rows;
-        }
-
-        List<(string Name, string SubPath, WzValue Value, bool IsDeleted)> mergedProps =
-            BuildMergedChildProperties(session, imgPath, subPath, target, parentDeleted);
-        if (mergedProps.Count == 0) {
-            return [];
-        }
-
-        var output = new SubPropertyRowDto[mergedProps.Count];
-        for (int i = 0; i < mergedProps.Count; i++) {
-            (string pName, string pSubPath, WzValue pVal, bool pDeleted) = mergedProps[i];
-            string pPath = $"{imgPath}/{pSubPath}";
-            (RepackerPropertyKind pk, string badge, string disp) = DescribeWzValue(pVal);
-            int liveChildCount = pVal.Children?.Count ?? (pVal is WzValue.Convex(var ci) ? ci.Count : 0);
-            int deletedChildCount = session.GetDeletedDirectChildProperties(imgPath, pSubPath).Count;
-            int childCount = liveChildCount + deletedChildCount;
-            int sz = pVal switch {
-                WzValue.Canvas c => c.Payload.Length,
-                WzValue.Sound s => s.DataLength,
-                WzValue.RawData r => r.DataLength,
-                _ => 0,
-            };
-            RepackerChangeState pState = EvaluatePropertyChangeState(session, imgPath, pSubPath, pVal, pDeleted);
-            output[i] = new SubPropertyRowDto(pName, pPath, RepackerNodeKind.Property, pk, badge, disp, childCount, sz, pState);
-        }
-        return output;
-    }
-
-    public static (RepackerPropertyKind Kind, string Badge, string DisplayValue) DescribeWzValue(WzValue v) => v switch {
-        WzValue.Null => (RepackerPropertyKind.Null, "NULL", "null"),
-        WzValue.Short(var x) => (RepackerPropertyKind.Short, "I16", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Int(var x) => (RepackerPropertyKind.Int, "I32", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Long(var x) => (RepackerPropertyKind.Long, "I64", x.ToString(CultureInfo.InvariantCulture)),
-        WzValue.Float(var x) => (RepackerPropertyKind.Float, "F32", x.ToString("G", CultureInfo.InvariantCulture)),
-        WzValue.Double(var x) => (RepackerPropertyKind.Double, "F64", x.ToString("G", CultureInfo.InvariantCulture)),
-        WzValue.String(var s) => (RepackerPropertyKind.String, "STR", s),
-        WzValue.Vector(var x, var y) => (RepackerPropertyKind.Vector, "VEC", $"({x}, {y})"),
-        WzValue.Uol(var s) => (RepackerPropertyKind.Uol, "UOL", $"-> {s}"),
-        WzValue.Object(var props) => (RepackerPropertyKind.Object, "SUB", $"{props.Count} properties"),
-        WzValue.Canvas c => (
-            RepackerPropertyKind.Canvas,
-            "PNG",
-            $"{c.Width}x{c.Height} ({WzCanvasFormatExtensions.GetDisplayName(c.Format)})"),
-        WzValue.Sound(var len, var dur) => (
-            RepackerPropertyKind.Sound,
-            "SND",
-            $"{dur} ms ({FormatByteSize(len)})"),
-        WzValue.Convex(var items) => (RepackerPropertyKind.Convex, "CVX", $"{items.Count} shapes"),
-        WzValue.RawData(var len) => (RepackerPropertyKind.RawData, "RAW", FormatByteSize(len)),
-        _ => (RepackerPropertyKind.None, "UNK", string.Empty),
-    };
-
-    private static byte[] ExtractBinarySliceForHexView(
-        ArchiveSession session,
-        string imgPath,
-        bool isImageRoot,
-        WzValue target) {
-        const int maxHexBytes = 65536;
-        if (isImageRoot) {
-            ReadOnlySpan<byte> span = session.GetRawImageMemory(imgPath).Span;
-            return span[..Math.Min(span.Length, maxHexBytes)].ToArray();
-        }
-        switch (target) {
-            case WzValue.Canvas c: {
-                ReadOnlySpan<byte> span = c.Payload.Span;
-                return span[..Math.Min(span.Length, maxHexBytes)].ToArray();
-            }
-            case WzValue.Sound s: {
-                ReadOnlySpan<byte> hSpan = s.Header.Span;
-                ReadOnlySpan<byte> pSpan = s.Payload.Span;
-                int total = Math.Min(maxHexBytes, hSpan.Length + pSpan.Length);
-                byte[] combined = new byte[total];
-                int hCopy = Math.Min(total, hSpan.Length);
-                hSpan[..hCopy].CopyTo(combined);
-                int pCopy = Math.Min(total - hCopy, pSpan.Length);
-                if (pCopy > 0) {
-                    pSpan[..pCopy].CopyTo(combined.AsSpan(hCopy, pCopy));
-                }
-                return combined;
-            }
-            case WzValue.RawData r: {
-                ReadOnlySpan<byte> span = r.Payload.Span;
-                return span[..Math.Min(span.Length, maxHexBytes)].ToArray();
-            }
-            default: {
-                var wrapper = new WzValue.Object([new WzProperty("value", target)]);
-                byte[] serialized = wrapper.ToBytes();
-                return serialized.Length <= maxHexBytes ? serialized : serialized[..maxHexBytes];
-            }
-        }
-    }
-
-    private static void SearchDirectoryUnsafe(
-        ArchiveSession session,
-        VirtualFsNode dir,
-        string prefix,
-        string nameFilter,
-        string valFilter,
-        RepackerPropertyKind? kindFilter,
-        bool exact,
-        StringComparison cmp,
-        int maxResults,
-        List<SearchResultItemDto> results) {
-        session.EnsureDirectoryLinked(dir);
-        foreach (VirtualFsNode child in dir.Children) {
-            if (results.Count >= maxResults) return;
-            if (child.IsDeleted) continue;
-            string fullPath = string.IsNullOrEmpty(prefix) ? child.Name : $"{prefix}/{child.Name}";
-
-            if (child.IsDir) {
-                if (kindFilter is null && string.IsNullOrEmpty(valFilter) && MatchesText(child.Name, fullPath, nameFilter, exact, cmp)) {
-                    results.Add(new SearchResultItemDto(
-                        session.ArchiveId,
-                        session.Name,
-                        fullPath,
-                        child.Name,
-                        RepackerNodeKind.Directory,
-                        RepackerPropertyKind.None,
-                        "DIR",
-                        $"{child.Children.Count} items"));
-                }
-                SearchDirectoryUnsafe(session, child, fullPath, nameFilter, valFilter, kindFilter, exact, cmp, maxResults, results);
-            } else if (child.IsImage) {
-                if (kindFilter is null && string.IsNullOrEmpty(valFilter) && MatchesText(child.Name, fullPath, nameFilter, exact, cmp)) {
-                    results.Add(new SearchResultItemDto(
-                        session.ArchiveId,
-                        session.Name,
-                        fullPath,
-                        child.Name,
-                        RepackerNodeKind.Image,
-                        RepackerPropertyKind.Object,
-                        "IMG",
-                        FormatByteSize(session.GetImageSize(fullPath))));
-                }
-
-                try {
-                    WzValue imgRoot = session.GetOrParseImage(fullPath);
-                    SearchPropertiesUnsafe(session, fullPath, "", imgRoot, nameFilter, valFilter, kindFilter, exact, cmp, maxResults, results);
-                } catch {
-                    // Skip unreadable image during global search
-                }
-            }
-        }
-    }
-
-    private static void SearchPropertiesUnsafe(
-        ArchiveSession session,
-        string imgPath,
-        string subPath,
-        WzValue parentVal,
-        string nameFilter,
-        string valFilter,
-        RepackerPropertyKind? kindFilter,
-        bool exact,
-        StringComparison cmp,
-        int maxResults,
-        List<SearchResultItemDto> results) {
-        IReadOnlyList<WzProperty>? props = parentVal.Children;
-        if (props is null) return;
-
-        foreach (WzProperty prop in props) {
-            if (results.Count >= maxResults) return;
-            string propSubPath = string.IsNullOrEmpty(subPath) ? prop.Name : $"{subPath}/{prop.Name}";
-            string fullPath = $"{imgPath}/{propSubPath}";
-            (RepackerPropertyKind pKind, string badge, string disp) = DescribeWzValue(prop.Value);
-
-            bool kindMatches = !kindFilter.HasValue || kindFilter.Value == RepackerPropertyKind.None || kindFilter.Value == pKind;
-            if (kindMatches) {
-                string searchableVal = GetSearchablePropertyValue(prop.Value, disp);
-                bool matches;
-                if (!string.IsNullOrEmpty(nameFilter) && string.IsNullOrEmpty(valFilter)) {
-                    matches = MatchesText(prop.Name, fullPath, nameFilter, exact, cmp)
-                        || (!string.IsNullOrEmpty(searchableVal) && MatchesSingleText(searchableVal, nameFilter, exact, cmp));
-                } else {
-                    bool nameMatches = string.IsNullOrEmpty(nameFilter) || MatchesText(prop.Name, fullPath, nameFilter, exact, cmp);
-                    bool valMatches = string.IsNullOrEmpty(valFilter) || (!string.IsNullOrEmpty(searchableVal) && MatchesSingleText(searchableVal, valFilter, exact, cmp));
-                    matches = nameMatches && valMatches && (!string.IsNullOrEmpty(nameFilter) || !string.IsNullOrEmpty(valFilter) || kindFilter.HasValue);
-                }
-                if (matches) {
-                    results.Add(new SearchResultItemDto(
-                        session.ArchiveId,
-                        session.Name,
-                        fullPath,
-                        prop.Name,
-                        RepackerNodeKind.Property,
-                        pKind,
-                        badge,
-                        disp));
-                }
-            }
-
-            if (prop.Value.Children is { Count: > 0 }) {
-                SearchPropertiesUnsafe(session, imgPath, propSubPath, prop.Value, nameFilter, valFilter, kindFilter, exact, cmp, maxResults, results);
-            }
-        }
-    }
-
-    private static string GetSearchablePropertyValue(WzValue val, string displayValue) => val switch {
-        WzValue.Short or WzValue.Int or WzValue.Long or WzValue.Float or WzValue.Double or WzValue.String or WzValue.Vector => displayValue,
-        WzValue.Uol(var uolStr) => uolStr,
-        _ => string.Empty,
-    };
-
-    private static bool MatchesText(string name, string fullPath, string filter, bool exact, StringComparison cmp) {
-        if (string.IsNullOrEmpty(filter)) return true;
-        if (exact) {
-            return string.Equals(name, filter, cmp) || string.Equals(fullPath, filter, cmp);
-        }
-        return name.Contains(filter, cmp) || fullPath.Contains(filter, cmp);
-    }
-
-    private static bool MatchesSingleText(string text, string filter, bool exact, StringComparison cmp) {
-        if (string.IsNullOrEmpty(filter)) return true;
-        return exact ? string.Equals(text, filter, cmp) : text.Contains(filter, cmp);
-    }
-
-    private static NodeInspectionDto ErrorInspection(string archiveId, string path, string error) =>
-        new(
-            false,
-            error,
-            archiveId,
-            string.Empty,
-            path,
-            string.Empty,
-            null,
-            RepackerNodeKind.Property,
-            RepackerPropertyKind.None,
-            "ERR",
-            string.Empty,
-            null,
-            null,
-            null,
-            null,
-            0,
-            0,
-            RepackerChangeState.Unchanged,
-            false,
-            false,
-            "{}",
-            [],
-            null,
-            [],
-            null,
-            null,
-            []);
-
-    private static string FormatByteSize(int bytes) => bytes switch {
-        < 1024 => $"{bytes} B",
-        < 1024 * 1024 => $"{bytes / 1024.0:F1} KB",
-        _ => $"{bytes / (1024.0 * 1024.0):F2} MB",
-    };
-
-    private static string EscapeJson(string s) =>
-        s.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     public void Dispose() {
         lock (syncLock) {

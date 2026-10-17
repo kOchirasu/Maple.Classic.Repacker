@@ -30,7 +30,7 @@ public sealed record DeletedPropertyEntry(
 /// virtual directory/image tracking, automatic split/directory <c>.wz</c> linking, and per-image undo/redo history.
 /// </summary>
 public sealed class ArchiveSession : IDisposable {
-    private const int MaxUndoDepth = 50;
+    private const int MaxUndoDepth = 100;
 
     private sealed record ImageUndoSnapshot(
         byte[] ImageBytes,
@@ -803,7 +803,7 @@ public sealed class ArchiveSession : IDisposable {
             return (imgRoot, imgDeleted);
         }
 
-        WzValue? active = RepackerWorkspace.ResolvePropertyNode(imgRoot, normSub);
+        WzValue? active = WzPropertyPaths.ResolvePropertyNode(imgRoot, normSub);
         if (active is not null) {
             return (active, imgDeleted);
         }
@@ -826,7 +826,7 @@ public sealed class ArchiveSession : IDisposable {
             cur = cur[..slash];
             if (map.TryGetValue(cur, out DeletedPropertyEntry? ancestorEntry)) {
                 string remainder = normSub[(cur.Length + 1)..];
-                WzValue? nested = RepackerWorkspace.ResolvePropertyNode(ancestorEntry.Value, remainder);
+                WzValue? nested = WzPropertyPaths.ResolvePropertyNode(ancestorEntry.Value, remainder);
                 if (nested is not null) {
                     return (nested, true);
                 }
@@ -864,7 +864,7 @@ public sealed class ArchiveSession : IDisposable {
 
         WzValue? parentVal = string.IsNullOrEmpty(targetEntry.ParentSubPath)
             ? imgRoot
-            : RepackerWorkspace.ResolvePropertyNode(imgRoot, targetEntry.ParentSubPath);
+            : WzPropertyPaths.ResolvePropertyNode(imgRoot, targetEntry.ParentSubPath);
         if (parentVal is null) {
             return (false, null);
         }
@@ -899,12 +899,12 @@ public sealed class ArchiveSession : IDisposable {
         if (deletedPropertiesByImage.TryGetValue(normImagePath, out Dictionary<string, DeletedPropertyEntry>? existingMap)) {
             foreach (DeletedPropertyEntry entry in existingMap.Values.ToArray()) {
                 // If the property exists again in curImg or its parent no longer exists in curImg, remove the entry
-                if (RepackerWorkspace.ResolvePropertyNode(curImg, entry.SubPath) is not null) {
+                if (WzPropertyPaths.ResolvePropertyNode(curImg, entry.SubPath) is not null) {
                     existingMap.Remove(entry.SubPath);
                     continue;
                 }
                 if (!string.IsNullOrEmpty(entry.ParentSubPath) &&
-                    RepackerWorkspace.ResolvePropertyNode(curImg, entry.ParentSubPath) is null) {
+                    WzPropertyPaths.ResolvePropertyNode(curImg, entry.ParentSubPath) is null) {
                     existingMap.Remove(entry.SubPath);
                 }
             }
