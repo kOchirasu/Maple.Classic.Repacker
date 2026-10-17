@@ -292,13 +292,6 @@ body.resizing-row * {
     margin-left: 6px;
 }
 
-.toolbar-divider {
-    width: 1px;
-    height: 20px;
-    background-color: var(--border-subtle);
-    margin: 0 3px;
-}
-
 .cmd-btn {
     display: inline-flex;
     align-items: center;
@@ -580,6 +573,11 @@ body.resizing-row * {
     outline: none;
 }
 
+.tree-empty {
+    padding: 16px 12px;
+    color: var(--text-muted);
+}
+
 .tree-row {
     display: flex;
     align-items: center;
@@ -799,6 +797,24 @@ body.resizing-row * {
     background-color: var(--bg-base);
     border: 1px solid var(--border-subtle);
     color: var(--text-secondary);
+}
+
+.meta-chip.chip-deleted {
+    color: var(--accent-danger);
+    border-color: var(--accent-danger-border);
+    background-color: var(--accent-danger-bg);
+}
+
+.meta-chip.chip-added {
+    color: var(--accent-green);
+    border-color: var(--accent-green-border);
+    background-color: var(--accent-green-bg);
+}
+
+.meta-chip.chip-modified {
+    color: var(--accent-warning);
+    border-color: var(--accent-warning-border);
+    background-color: var(--accent-warning-bg);
 }
 
 .stage-content {
@@ -1364,6 +1380,11 @@ body.resizing-row * {
     max-width: 360px;
 }
 
+.data-table tbody td.cell-size {
+    text-align: right;
+    color: var(--text-muted);
+}
+
 /* Right Pane: Property Inspector */
 .inspector-collapsed-strip {
     display: none;
@@ -1635,6 +1656,11 @@ body.resizing-row * {
     border-radius: 2px;
 }
 
+.hex-byte-empty {
+    cursor: default;
+    pointer-events: none;
+}
+
 .hex-byte:hover:not(.active) {
     background-color: var(--bg-hover);
 }
@@ -1656,35 +1682,6 @@ body.resizing-row * {
     overflow: auto;
     background-color: var(--bg-panel);
     flex-shrink: 0;
-}
-
-/* Batch Export Workbench */
-.batch-tools-grid {
-    display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    gap: 12px;
-    padding: 12px;
-    overflow: auto;
-}
-
-.batch-card {
-    background-color: var(--bg-panel);
-    border: 1px solid var(--border-subtle);
-    border-radius: 6px;
-    padding: 12px;
-}
-
-.batch-desc {
-    margin: 0 0 10px 0;
-    color: var(--text-secondary);
-    font-size: 12px;
-    line-height: 1.4;
-}
-
-.batch-form-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
 }
 
 /* Console Logs */
@@ -1802,6 +1799,58 @@ body.resizing-row * {
     color: var(--text-secondary);
 }
 
+.modal-text {
+    margin: 0;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.modal-text.secondary {
+    color: var(--text-secondary);
+    font-size: 12px;
+}
+
+.modal-text.warning {
+    color: var(--accent-warning);
+    font-size: 12px;
+}
+
+.modal-list {
+    margin: 0;
+    padding-left: 20px;
+    color: var(--text-primary);
+    font-size: 12.5px;
+}
+
+.modal-list li {
+    margin: 4px 0;
+}
+
+.modal-scope {
+    padding: 6px 10px;
+    background-color: var(--bg-base);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-primary);
+    word-break: break-all;
+}
+
+.input-with-button {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.input-with-button .cmd-btn {
+    flex-shrink: 0;
+}
+
+.text-muted {
+    color: var(--text-muted);
+}
+
 .modal-footer {
     display: flex;
     align-items: center;
@@ -1810,35 +1859,6 @@ body.resizing-row * {
     padding: 10px 16px;
     background-color: var(--bg-panel);
     border-top: 1px solid var(--border-subtle);
-}
-
-.recent-paths-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    max-height: 150px;
-    overflow: auto;
-}
-
-.recent-path-btn {
-    text-align: left;
-    font-family: var(--font-mono);
-    font-size: 11.5px;
-    padding: 5px 8px;
-    background-color: var(--bg-base);
-    border: 1px solid var(--border-subtle);
-    border-radius: 4px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.recent-path-btn:hover {
-    background-color: var(--bg-hover);
-    color: var(--text-bright);
-    border-color: var(--border-focus);
 }
 
 /* Toasts */

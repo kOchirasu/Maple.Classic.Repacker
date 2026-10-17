@@ -17,7 +17,6 @@ public sealed record WorkspaceStatusPayloadDto(
     RepackerLogEntry[] Logs,
     bool LogsReset,
     SavedRepackerUiStateDto? UiState,
-    string[]? RecentPaths,
     bool SupportsNativeDialogs = false);
 
 public sealed record RpcOperationResponse(

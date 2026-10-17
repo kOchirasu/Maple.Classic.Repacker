@@ -12,9 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "removeComments": false
   },
-  "files": [
-    "wwwroot/rpc.ts",
-    "wwwroot/layout.ts",
-    "wwwroot/app.ts"
+  "include": [
+    "wwwroot/**/*.ts"
   ]
 }

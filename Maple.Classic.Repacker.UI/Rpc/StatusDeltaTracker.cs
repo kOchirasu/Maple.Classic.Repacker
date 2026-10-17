@@ -15,7 +15,6 @@ internal sealed class StatusDeltaTracker {
     private byte[]? sentArchives;
     private byte[]? sentClipboard;
     private byte[]? sentUiState;
-    private byte[]? sentRecentPaths;
     private string? sentSelectedArchiveId;
     private string? sentSelectedNodePath;
     private long sentLogsEpoch = -1;
@@ -26,7 +25,6 @@ internal sealed class StatusDeltaTracker {
         ArchiveSummaryDto[]? archives = Changed(ref sentArchives, ctx.Workspace.GetArchiveSummaries());
         ClipboardStateDto? clipboard = Changed(ref sentClipboard, ctx.Workspace.GetClipboardState());
         SavedRepackerUiStateDto? uiState = Changed(ref sentUiState, ctx.Settings.GetUiState());
-        string[]? recentPaths = Changed(ref sentRecentPaths, ctx.Settings.GetRecentPaths());
 
         // Log ids keep increasing across clears, so "entries after the last id sent" is right even after a clear;
         // a changed epoch only tells the client to drop the entries it already has first.
@@ -37,8 +35,7 @@ internal sealed class StatusDeltaTracker {
         string selectedNodePath = ctx.Workspace.SelectedNodePath;
         bool selectionChanged = selectedArchiveId != sentSelectedArchiveId || selectedNodePath != sentSelectedNodePath;
 
-        if (archives is null && clipboard is null && uiState is null && recentPaths is null &&
-            !logsReset && newLogs.Length == 0 && !selectionChanged) {
+        if (archives is null && clipboard is null && uiState is null && !logsReset && newLogs.Length == 0 && !selectionChanged) {
             return null;
         }
 
@@ -58,7 +55,6 @@ internal sealed class StatusDeltaTracker {
             newLogs,
             logsReset,
             uiState,
-            recentPaths,
             RpcContext.SupportsNativeDialogs);
     }
 

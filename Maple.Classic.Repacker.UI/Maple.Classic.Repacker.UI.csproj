@@ -146,15 +146,11 @@
 
     <Target Name="EmbedFrontend" DependsOnTargets="BuildFrontend" BeforeTargets="SplitResourcesByCulture;CoreCompile">
         <ItemGroup>
-            <EmbeddedResource Include="obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js" LogicalName="wwwroot/vendor/codemirror/cm6.bundle.js" Condition="Exists('obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js')" />
-            <EmbeddedResource Include="obj/ts/wwwroot/vendor/msgpack/msgpack.min.js" LogicalName="wwwroot/vendor/msgpack/msgpack.min.js" Condition="Exists('obj/ts/wwwroot/vendor/msgpack/msgpack.min.js')" />
-            <EmbeddedResource Include="obj/ts/wwwroot/rpc.js" LogicalName="wwwroot/rpc.js" Condition="Exists('obj/ts/wwwroot/rpc.js')" />
-            <EmbeddedResource Include="obj/ts/wwwroot/layout.js" LogicalName="wwwroot/layout.js" Condition="Exists('obj/ts/wwwroot/layout.js')" />
-            <EmbeddedResource Include="obj/ts/wwwroot/app.js" LogicalName="wwwroot/app.js" Condition="Exists('obj/ts/wwwroot/app.js')" />
+            <!-- Compiled TypeScript (rpc.js, layout.js, app.js, app/*.js) plus the vendor bundles, keeping their wwwroot-relative paths -->
+            <FrontendJs Include="obj/ts/wwwroot/**/*.js" />
+            <EmbeddedResource Include="@(FrontendJs)" LogicalName="wwwroot/$([System.String]::Copy('%(FrontendJs.RecursiveDir)').Replace('\', '/'))%(FrontendJs.Filename)%(FrontendJs.Extension)" />
         </ItemGroup>
-        <Copy SourceFiles="obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js" DestinationFolder="$(OutputPath)wwwroot/vendor/codemirror" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/vendor/codemirror/cm6.bundle.js')" />
-        <Copy SourceFiles="obj/ts/wwwroot/vendor/msgpack/msgpack.min.js" DestinationFolder="$(OutputPath)wwwroot/vendor/msgpack" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/vendor/msgpack/msgpack.min.js')" />
-        <Copy SourceFiles="obj/ts/wwwroot/rpc.js;obj/ts/wwwroot/layout.js;obj/ts/wwwroot/app.js" DestinationFolder="$(OutputPath)wwwroot" SkipUnchangedFiles="true" Condition="Exists('obj/ts/wwwroot/app.js')" />
+        <Copy SourceFiles="@(FrontendJs)" DestinationFiles="@(FrontendJs->'$(OutputPath)wwwroot/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
     </Target>
 
     <ItemGroup>

@@ -451,7 +451,6 @@ namespace MapleRepacker {
         clipboard: ClipboardStateDto;
         logs: RepackerLogEntry[];
         uiState?: SavedRepackerUiStateDto | null;
-        recentPaths: string[];
         supportsNativeDialogs?: boolean;
     }
 
@@ -468,7 +467,6 @@ namespace MapleRepacker {
         logs?: RepackerLogEntry[] | null;
         logsReset?: boolean;
         uiState?: SavedRepackerUiStateDto | null;
-        recentPaths?: string[] | null;
         supportsNativeDialogs?: boolean;
     }
 
@@ -575,7 +573,6 @@ namespace MapleRepacker {
             clipboard: delta.clipboard ?? prev?.clipboard ?? ({ hasData: false } as ClipboardStateDto),
             logs: logs.length > MAX_LOG_ENTRIES ? logs.slice(logs.length - MAX_LOG_ENTRIES) : logs,
             uiState: delta.uiState ?? prev?.uiState ?? null,
-            recentPaths: delta.recentPaths ?? prev?.recentPaths ?? [],
             supportsNativeDialogs: delta.supportsNativeDialogs,
         };
     }
