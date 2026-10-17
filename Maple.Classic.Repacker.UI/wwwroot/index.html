@@ -138,7 +138,6 @@
                                 <button type="button" class="seg-btn active" data-bg="checker" title="Checkerboard transparency grid">Grid</button>
                                 <button type="button" class="seg-btn" data-bg="dark" title="Dark charcoal background">Dark</button>
                                 <button type="button" class="seg-btn" data-bg="light" title="Light background">Light</button>
-                                <button type="button" class="seg-btn" data-bg="green" title="Chroma green background">Green</button>
                             </div>
 
                             <div class="toolbar-group">
@@ -198,7 +197,7 @@
                         <!-- Animation Player Strip (shown when node has animation frames) -->
                         <div class="animation-player-bar hidden" id="animPlayerBar">
                             <div class="anim-controls">
-                                <button type="button" class="cmd-btn small primary" id="btnAnimPlayPause">Pause</button>
+                                <button type="button" class="cmd-btn small primary" id="btnAnimPlayPause">Play</button>
                                 <button type="button" class="cmd-btn small" id="btnAnimPrev" title="Previous Frame">&laquo;</button>
                                 <span class="anim-frame-counter" id="animFrameCounter">Frame 0 / 0</span>
                                 <button type="button" class="cmd-btn small" id="btnAnimNext" title="Next Frame">&raquo;</button>
@@ -226,11 +225,31 @@
                         </div>
                     </section>
 
-                    <!-- 3. Sub-Properties & Children Table Section -->
+                    <!-- 3. String Value Stage Section -->
+                    <section class="string-stage-section hidden" id="stringStageSection">
+                        <div class="string-card">
+                            <div class="string-card-header">
+                                <div>
+                                    <div class="string-title" id="stringTitle">String Value</div>
+                                    <div class="string-subtitle" id="stringSubtitle">String Property</div>
+                                </div>
+                                <div class="string-actions">
+                                    <span class="string-meta-pill" id="stringLengthMeta">0 chars</span>
+                                    <button type="button" class="cmd-btn small" id="btnCopyStringStage" title="Copy string value to clipboard">Copy String</button>
+                                </div>
+                            </div>
+                            <div class="string-viewer-box" id="stringViewerContent"></div>
+                        </div>
+                    </section>
+
+                    <!-- 4. Sub-Properties & Children Table Section -->
                     <section class="children-table-section" id="childrenTableSection">
-                        <div class="section-subbar">
+                        <div class="section-subbar" id="childrenTableHeaderBar">
                             <span class="section-subtitle" id="childrenTableTitle">Child Nodes</span>
-                            <span class="section-submeta" id="childrenTableMeta">Double-click a row to open</span>
+                            <div class="section-subbar-actions">
+                                <span class="section-submeta" id="childrenTableMeta">Click a row to inspect</span>
+                                <button type="button" class="cmd-btn small subbar-toggle-btn" id="btnToggleChildrenTable" title="Minimize child nodes table">&#9662; Minimize</button>
+                            </div>
                         </div>
                         <div class="table-scroll-wrap">
                             <table class="data-table" id="childrenTable">

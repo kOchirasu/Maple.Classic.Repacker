@@ -60,7 +60,7 @@ namespace MapleRepacker {
         private readonly spriteCtx: CanvasRenderingContext2D;
         private decodedFrames: DecodedSpriteFrame[] = [];
         private activeFrameIdx = 0;
-        private animPlaying = true;
+        private animPlaying = false;
         private animTimer: ReturnType<typeof setTimeout> | null = null;
         private zoomScale = 2.0;
         private panX = 0;
@@ -74,6 +74,10 @@ namespace MapleRepacker {
 
         // Sound Player Object URL
         private activeAudioUrl: string | null = null;
+
+        // Children Table Minimize State
+        private childrenTableMinimized = false;
+        private lastInspectedLayerKey = '';
 
         // Hex Inspector State
         private activeHexBytes: Uint8Array = new Uint8Array(0);
@@ -191,6 +195,10 @@ namespace MapleRepacker {
 
             document.getElementById('canvasStageSection')?.classList.add('hidden');
             document.getElementById('soundStageSection')?.classList.add('hidden');
+            document.getElementById('stringStageSection')?.classList.add('hidden');
+            this.childrenTableMinimized = false;
+            this.lastInspectedLayerKey = '';
+            this.applyChildrenTableMinimizedDom();
             document.getElementById('breadcrumbBar')!.innerHTML = '';
             document.getElementById('stageMetaBadges')!.innerHTML = '';
             document.getElementById('childrenTableBody')!.innerHTML = '';
@@ -344,8 +352,8 @@ namespace MapleRepacker {
                 rootRow.innerHTML = `
                     <span class="tree-twisty">${isRootExpanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="tree-badge badge-WZ">WZ</span>
-                    <span class="tree-name">${this.escapeHtml(ar.name)}</span>
-                    <span class="tree-val-preview">v${ar.version} &bull; ${ar.imageCount} img</span>
+                    <span class="tree-name" title="${this.escapeHtml(ar.name)}">${this.escapeHtml(ar.name)}</span>
+                    <span class="tree-val-preview" title="v${ar.version} • ${ar.imageCount} img">v${ar.version} &bull; ${ar.imageCount} img</span>
                     ${rootStatusDot}
                 `;
 
@@ -403,8 +411,11 @@ namespace MapleRepacker {
                 row.dataset.archiveId = archiveId;
                 row.dataset.path = node.path;
 
+                const canExpand = node.hasChildren || node.nodeKind === 'Directory';
                 const twistyChar = node.hasChildren ? (isExpanded ? '&#9662;' : '&#9656;') : '';
-                const valPreview = node.displayValue ? `<span class="tree-val-preview">${this.escapeHtml(node.displayValue)}</span>` : '';
+                const valPreview = node.displayValue
+                    ? `<span class="tree-val-preview" title="${this.escapeHtml(node.displayValue)}">${this.escapeHtml(node.displayValue)}</span>`
+                    : '';
                 const statusDot = node.isAdded
                     ? '<span class="tree-add-dot" title="Added"></span>'
                     : node.isModified
@@ -414,7 +425,7 @@ namespace MapleRepacker {
                 row.innerHTML = `
                     <span class="tree-twisty">${twistyChar}</span>
                     <span class="tree-badge badge-${this.escapeHtml(node.typeBadge)}">${this.escapeHtml(node.typeBadge)}</span>
-                    <span class="tree-name">${this.escapeHtml(node.name)}</span>
+                    <span class="tree-name" title="${this.escapeHtml(node.name)}">${this.escapeHtml(node.name)}</span>
                     ${valPreview}
                     ${statusDot}
                 `;
@@ -422,12 +433,12 @@ namespace MapleRepacker {
                 row.addEventListener('click', (ev) => {
                     this.closeContextMenu();
                     const clickedTwisty = (ev.target as HTMLElement).classList.contains('tree-twisty');
-                    void this.toggleOrSelectTreeNode(archiveId, node.path, node.hasChildren, clickedTwisty);
+                    void this.toggleOrSelectTreeNode(archiveId, node.path, canExpand, clickedTwisty);
                 });
 
                 row.addEventListener('dblclick', () => {
                     this.closeContextMenu();
-                    if (node.hasChildren) {
+                    if (canExpand) {
                         void this.toggleNodeExpansionOnly(archiveId, node.path);
                     }
                 });
@@ -544,13 +555,19 @@ namespace MapleRepacker {
             // 1. Breadcrumbs & Meta Chips
             this.renderBreadcrumbs(dto);
 
+            // Sync Child Nodes Table minimize state before measuring Canvas viewport
+            this.syncChildrenTableMinimizedState(dto);
+
             // 2. Canvas / Animation Viewport
             await this.renderCanvasOrAnimationStage(dto);
 
             // 3. Sound_DX8 Audio Studio
             this.renderSoundStage(dto);
 
-            // 4. Child Nodes Table
+            // 4. String Stage Preview
+            this.renderStringStage(dto);
+
+            // 5. Child Nodes Table
             this.renderChildrenTable(dto);
 
             // 5. Right Property Inspector
@@ -652,7 +669,7 @@ namespace MapleRepacker {
             }
 
             // Decode frames into HTMLImageElements
-            if (hasAnimFrames && !hasSingleCanvas) {
+            if (hasAnimFrames && dto.animationFrames.length > 1) {
                 for (const f of dto.animationFrames) {
                     const decoded = await this.decodePngBytesToFrame(
                         toUint8Array(f.pngBytes),
@@ -694,12 +711,11 @@ namespace MapleRepacker {
             }
 
             this.activeFrameIdx = 0;
+            this.animPlaying = false;
+            this.panX = 0;
+            this.panY = 0;
             this.renderAnimationPlayerBar();
             this.drawActiveCanvasFrame();
-
-            if (this.decodedFrames.length > 1 && this.animPlaying) {
-                this.scheduleNextAnimationFrame();
-            }
         }
 
         private decodePngBytesToFrame(
@@ -787,7 +803,7 @@ namespace MapleRepacker {
             bar.classList.remove('hidden');
 
             const playBtn = document.getElementById('btnAnimPlayPause')!;
-            playBtn.textContent = this.animPlaying ? 'Pause' : 'Play';
+            playBtn.textContent = this.animPlaying ? 'Stop' : 'Play';
 
             this.decodedFrames.forEach((f, idx) => {
                 const pill = document.createElement('button');
@@ -818,6 +834,16 @@ namespace MapleRepacker {
             pills.forEach((el, idx) => {
                 el.classList.toggle('active', idx === this.activeFrameIdx);
             });
+
+            const activeFrame = this.decodedFrames[this.activeFrameIdx];
+            if (activeFrame?.framePath) {
+                const tbody = document.getElementById('childrenTableBody');
+                if (tbody) {
+                    tbody.querySelectorAll('tr').forEach((tr) => {
+                        tr.classList.toggle('active-row', (tr as HTMLElement).dataset.path === activeFrame.framePath);
+                    });
+                }
+            }
         }
 
         private drawActiveCanvasFrame(): void {
@@ -836,14 +862,27 @@ namespace MapleRepacker {
             const frame = this.decodedFrames[this.activeFrameIdx];
             if (!frame) return;
 
-            // Anchor origin at center of viewport + user pan offset
-            const anchorX = Math.floor(cw * 0.5 + this.panX);
-            const anchorY = Math.floor(ch * 0.62 + this.panY);
+            // Center the bounding box of the sprite (or animation sequence) in the viewport + user pan offset
+            let minRelX = -frame.origin.x;
+            let maxRelX = frame.width - frame.origin.x;
+            let minRelY = -frame.origin.y;
+            let maxRelY = frame.height - frame.origin.y;
+            for (const f of this.decodedFrames) {
+                minRelX = Math.min(minRelX, -f.origin.x);
+                maxRelX = Math.max(maxRelX, f.width - f.origin.x);
+                minRelY = Math.min(minRelY, -f.origin.y);
+                maxRelY = Math.max(maxRelY, f.height - f.origin.y);
+            }
+            const centerRelX = (minRelX + maxRelX) * 0.5;
+            const centerRelY = (minRelY + maxRelY) * 0.5;
 
-            const drawX = Math.floor(anchorX - frame.origin.x * this.zoomScale);
-            const drawY = Math.floor(anchorY - frame.origin.y * this.zoomScale);
-            const drawW = Math.floor(frame.width * this.zoomScale);
-            const drawH = Math.floor(frame.height * this.zoomScale);
+            const anchorX = Math.round(cw * 0.5 - centerRelX * this.zoomScale + this.panX);
+            const anchorY = Math.round(ch * 0.5 - centerRelY * this.zoomScale + this.panY);
+
+            const drawX = Math.round(anchorX - frame.origin.x * this.zoomScale);
+            const drawY = Math.round(anchorY - frame.origin.y * this.zoomScale);
+            const drawW = Math.round(frame.width * this.zoomScale);
+            const drawH = Math.round(frame.height * this.zoomScale);
 
             ctx.save();
             ctx.imageSmoothingEnabled = false;
@@ -943,8 +982,14 @@ namespace MapleRepacker {
             const s = dto.sound;
             const audioBytes = toUint8Array(s.audioBytes);
 
-            document.getElementById('soundTitle')!.textContent = `${dto.name} (${s.formatName})`;
-            document.getElementById('soundSubtitle')!.textContent = `${dto.archiveName} • ${dto.path}`;
+            const firstSoundChild =
+                dto.propertyKind !== RepackerPropertyKind.Sound
+                    ? (dto.children || []).find((c) => c.propertyKind === RepackerPropertyKind.Sound)
+                    : null;
+            const soundName = firstSoundChild ? firstSoundChild.name : dto.name;
+            const soundPath = firstSoundChild ? firstSoundChild.path : dto.path;
+            document.getElementById('soundTitle')!.textContent = `${soundName} (${s.formatName})`;
+            document.getElementById('soundSubtitle')!.textContent = `${dto.archiveName} \u2022 ${soundPath}`;
 
             const blob = new Blob([audioBytes as unknown as BlobPart], { type: s.mimeType || 'audio/wav' });
             this.activeAudioUrl = URL.createObjectURL(blob);
@@ -995,6 +1040,124 @@ namespace MapleRepacker {
             ctx.stroke();
         }
 
+        private getActiveStringPreviewTarget(dto: NodeInspectionDto): {
+            name: string;
+            path: string;
+            text: string;
+            sizeBytes: number;
+        } | null {
+            if (dto.propertyKind === RepackerPropertyKind.String) {
+                return {
+                    name: dto.name,
+                    path: dto.path,
+                    text: dto.rawStringValue ?? dto.displayValue ?? '',
+                    sizeBytes: dto.sizeBytes,
+                };
+            }
+            if (!dto.canvas && !dto.sound && (!dto.animationFrames || dto.animationFrames.length === 0)) {
+                const firstStrChild = (dto.children || []).find(
+                    (c) => c.propertyKind === RepackerPropertyKind.String
+                );
+                if (firstStrChild) {
+                    const text = firstStrChild.displayValue ?? '';
+                    return {
+                        name: firstStrChild.name,
+                        path: firstStrChild.path,
+                        text,
+                        sizeBytes: firstStrChild.sizeBytes || new TextEncoder().encode(text).length,
+                    };
+                }
+            }
+            return null;
+        }
+
+        private renderStringStage(dto: NodeInspectionDto): void {
+            const section = document.getElementById('stringStageSection')!;
+            const target = this.getActiveStringPreviewTarget(dto);
+            if (!target) {
+                section.classList.add('hidden');
+                return;
+            }
+
+            section.classList.remove('hidden');
+            const text = target.text;
+            document.getElementById('stringTitle')!.textContent = target.name;
+            document.getElementById('stringSubtitle')!.textContent = `${dto.archiveName} \u2022 ${target.path}`;
+
+            const lineCount = text.length === 0 ? 0 : text.split(/\r\n|\r|\n|\\n/).length;
+            const lineLabel = lineCount > 1 ? ` \u2022 ${lineCount} lines` : '';
+            document.getElementById('stringLengthMeta')!.textContent = `${text.length} chars${lineLabel} \u2022 ${formatByteSize(target.sizeBytes)}`;
+
+            const viewer = document.getElementById('stringViewerContent')!;
+            if (text.length === 0) {
+                viewer.textContent = '(Empty string)';
+                viewer.classList.add('empty');
+            } else {
+                const formatted = text.includes('\n') ? text : text.replace(/\\r\\n/g, '\n').replace(/\\n/g, '\n');
+                viewer.textContent = formatted;
+                viewer.classList.remove('empty');
+            }
+        }
+
+        private getHighlightedChildRowPath(dto: NodeInspectionDto): string {
+            if (dto.childCount === 0) {
+                return dto.path;
+            }
+            if (dto.animationFrames && dto.animationFrames.length > 0) {
+                return dto.animationFrames[0].framePath;
+            }
+            if (dto.canvas && dto.propertyKind !== RepackerPropertyKind.Canvas) {
+                const firstCanvas = (dto.children || []).find((c) => c.propertyKind === RepackerPropertyKind.Canvas);
+                if (firstCanvas) return firstCanvas.path;
+            }
+            if (dto.sound && dto.propertyKind !== RepackerPropertyKind.Sound) {
+                const firstSound = (dto.children || []).find((c) => c.propertyKind === RepackerPropertyKind.Sound);
+                if (firstSound) return firstSound.path;
+            }
+            const strTarget = this.getActiveStringPreviewTarget(dto);
+            if (strTarget && strTarget.path !== dto.path) {
+                return strTarget.path;
+            }
+            return dto.path;
+        }
+
+        private getNodeLayerKey(dto: NodeInspectionDto): string {
+            const parts = dto.path ? dto.path.split('/').filter((p) => p.length > 0) : [];
+            const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
+            return `${dto.archiveId}::${parentPath}::${parts.length}`;
+        }
+
+        private syncChildrenTableMinimizedState(dto: NodeInspectionDto): void {
+            const layerKey = this.getNodeLayerKey(dto);
+
+            if (this.childrenTableMinimized && layerKey !== this.lastInspectedLayerKey) {
+                this.childrenTableMinimized = false;
+            }
+
+            this.lastInspectedLayerKey = layerKey;
+            this.applyChildrenTableMinimizedDom();
+        }
+
+        private toggleChildrenTableMinimized(): void {
+            this.childrenTableMinimized = !this.childrenTableMinimized;
+            this.applyChildrenTableMinimizedDom();
+            this.drawActiveCanvasFrame();
+        }
+
+        private applyChildrenTableMinimizedDom(): void {
+            const section = document.getElementById('childrenTableSection');
+            const btn = document.getElementById('btnToggleChildrenTable');
+            if (section) {
+                section.classList.toggle('minimized', this.childrenTableMinimized);
+            }
+            if (btn) {
+                btn.innerHTML = this.childrenTableMinimized ? '&#9652; Expand' : '&#9662; Minimize';
+                btn.title = this.childrenTableMinimized
+                    ? 'Expand child nodes table'
+                    : 'Minimize child nodes table';
+            }
+        }
+
         private renderChildrenTable(dto: NodeInspectionDto): void {
             const titleEl = document.getElementById('childrenTableTitle')!;
             const metaEl = document.getElementById('childrenTableMeta')!;
@@ -1002,11 +1165,29 @@ namespace MapleRepacker {
             tbody.innerHTML = '';
 
             const children = dto.children || [];
-            titleEl.textContent = `Child Nodes (${children.length})`;
-            metaEl.textContent = children.length > 0 ? 'Click a row to inspect' : 'Leaf property node';
+            const isParentChildren = dto.childCount === 0 && children.length > 0;
+            if (isParentChildren) {
+                const lastSlash = dto.path.lastIndexOf('/');
+                const parentPath = lastSlash >= 0 ? dto.path.slice(0, lastSlash) : '';
+                const parentName = parentPath.includes('/')
+                    ? parentPath.slice(parentPath.lastIndexOf('/') + 1)
+                    : parentPath || dto.archiveName;
+                titleEl.textContent = `Parent Child Nodes (${children.length})`;
+                metaEl.textContent = `Children of ${parentName} \u2022 Click a row to inspect`;
+            } else {
+                titleEl.textContent = `Child Nodes (${children.length})`;
+                metaEl.textContent = children.length > 0 ? 'Click a row to inspect' : 'No child nodes';
+            }
 
+            const highlightedPath = this.getHighlightedChildRowPath(dto);
+            let activeRowEl: HTMLTableRowElement | null = null;
             for (const c of children) {
                 const tr = document.createElement('tr');
+                tr.dataset.path = c.path;
+                if (c.path === highlightedPath) {
+                    tr.className = 'active-row';
+                    activeRowEl = tr;
+                }
                 const sizeOrItems =
                     c.sizeBytes > 0
                         ? formatByteSize(c.sizeBytes)
@@ -1025,6 +1206,22 @@ namespace MapleRepacker {
                     void this.selectAndInspectNode(dto.archiveId, c.path, true);
                 });
                 tbody.appendChild(tr);
+            }
+
+            const scrollWrap = tbody.closest('.table-scroll-wrap') as HTMLElement | null;
+            if (scrollWrap) {
+                if (!isParentChildren || !activeRowEl) {
+                    scrollWrap.scrollTop = 0;
+                } else {
+                    const rowTop = activeRowEl.offsetTop;
+                    const rowBottom = rowTop + activeRowEl.offsetHeight;
+                    const headerHeight = 28;
+                    if (rowTop - headerHeight < scrollWrap.scrollTop) {
+                        scrollWrap.scrollTop = Math.max(0, rowTop - headerHeight);
+                    } else if (rowBottom > scrollWrap.scrollTop + scrollWrap.clientHeight) {
+                        scrollWrap.scrollTop = rowBottom - scrollWrap.clientHeight;
+                    }
+                }
             }
         }
 
@@ -1263,9 +1460,10 @@ namespace MapleRepacker {
                 if (files.length === 0) return;
                 let lastArchiveId = '';
                 for (const file of files) {
-                    const existing = this.findExistingOpenArchive(file.name);
+                    const nativePath = (file as unknown as { path?: string }).path || '';
+                    const existing = this.findExistingOpenArchive(nativePath || file.name);
                     if (existing) {
-                        const confirmed = await this.confirmReloadArchive(existing);
+                        const confirmed = await this.confirmReloadArchive(existing, file.name);
                         if (!confirmed) {
                             continue;
                         }
@@ -1273,6 +1471,7 @@ namespace MapleRepacker {
                     const bytes = new Uint8Array(await file.arrayBuffer());
                     const res = await rpcCall<RpcOperationResponse>('workspace.openBytes', {
                         fileName: file.name,
+                        filePath: nativePath || undefined,
                         data: bytes,
                     });
                     if (res.ok && res.data.archiveId) {
@@ -1620,12 +1819,16 @@ namespace MapleRepacker {
 
             // Animation controls
             document.getElementById('btnAnimPlayPause')!.addEventListener('click', () => {
+                if (this.decodedFrames.length <= 1) return;
                 this.animPlaying = !this.animPlaying;
-                document.getElementById('btnAnimPlayPause')!.textContent = this.animPlaying ? 'Pause' : 'Play';
+                document.getElementById('btnAnimPlayPause')!.textContent = this.animPlaying ? 'Stop' : 'Play';
                 if (this.animPlaying) {
                     this.scheduleNextAnimationFrame();
                 } else {
                     this.stopAnimationLoop();
+                    this.activeFrameIdx = 0;
+                    this.updateActiveFrameHighlight();
+                    this.drawActiveCanvasFrame();
                 }
             });
 
@@ -1705,6 +1908,25 @@ namespace MapleRepacker {
             });
             document.getElementById('btnExportAudio')!.addEventListener('click', () => {
                 void this.exportCurrentNode('audio');
+            });
+
+            // String stage copy button
+            document.getElementById('btnCopyStringStage')!.addEventListener('click', async () => {
+                const dto = this.currentInspection;
+                if (!dto) return;
+                const target = this.getActiveStringPreviewTarget(dto);
+                if (!target) return;
+                try {
+                    await navigator.clipboard.writeText(target.text);
+                    this.showToast('Copied string to clipboard', 'success');
+                } catch {
+                    this.showToast('Failed to copy string', 'error');
+                }
+            });
+
+            // Child nodes table minimize/expand toggle
+            document.getElementById('btnToggleChildrenTable')!.addEventListener('click', () => {
+                this.toggleChildrenTableMinimized();
             });
         }
 
@@ -2225,19 +2447,98 @@ namespace MapleRepacker {
             }
         }
 
+        private stripNumericShardSuffix(stem: string): string {
+            const lastUnderscore = stem.lastIndexOf('_');
+            if (lastUnderscore <= 0 || lastUnderscore === stem.length - 1) {
+                return stem;
+            }
+            const suffix = stem.slice(lastUnderscore + 1);
+            if (!/^\d+$/.test(suffix)) {
+                return stem;
+            }
+            return stem.slice(0, lastUnderscore);
+        }
+
+        private isSameOrCanvasStem(stemA: string, stemB: string): boolean {
+            const baseA = this.stripNumericShardSuffix(stemA.toLowerCase());
+            const baseB = this.stripNumericShardSuffix(stemB.toLowerCase());
+            return (
+                baseA === baseB ||
+                baseA === `${baseB}_canvas` ||
+                baseA === `${baseB}__canvas` ||
+                baseB === `${baseA}_canvas` ||
+                baseB === `${baseA}__canvas`
+            );
+        }
+
+        private normalizePathForCompare(p: string): string {
+            return p.trim().replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+        }
+
+        private getDirPart(normPath: string): string {
+            const lastSlash = normPath.lastIndexOf('/');
+            return lastSlash >= 0 ? normPath.slice(0, lastSlash) : '';
+        }
+
         private findExistingOpenArchive(filePathOrName: string): ArchiveSummaryDto | undefined {
             const rawTrimmed = filePathOrName.trim();
             if (!rawTrimmed) return undefined;
-            const basePart = rawTrimmed.split(/[\\/]/).pop() || rawTrimmed;
-            const cleanName = basePart.toLowerCase().endsWith('.wz') ? basePart : `${basePart}.wz`;
-            const lowerCleanName = cleanName.toLowerCase();
-            const lowerFullPath = rawTrimmed.toLowerCase();
 
-            return this.archives.find(
-                (a) =>
-                    (a.filePath && a.filePath.toLowerCase() === lowerFullPath) ||
-                    a.name.toLowerCase() === lowerCleanName
-            );
+            const normTarget = this.normalizePathForCompare(rawTrimmed);
+            const targetDir = this.getDirPart(normTarget);
+            const basePart = normTarget.split('/').pop() || normTarget;
+            const cleanName = basePart.endsWith('.wz') ? basePart : `${basePart}.wz`;
+            const targetStem = cleanName.slice(0, -3);
+            const targetBaseStem = this.stripNumericShardSuffix(targetStem);
+
+            for (const a of this.archives) {
+                const aLowerName = a.name.toLowerCase();
+                const aStem = aLowerName.endsWith('.wz') ? aLowerName.slice(0, -3) : aLowerName;
+                const aNormPath = a.filePath ? this.normalizePathForCompare(a.filePath) : '';
+                const aDir = aNormPath ? this.getDirPart(aNormPath) : '';
+
+                if ((aNormPath && aNormPath === normTarget) || aLowerName === cleanName) {
+                    return a;
+                }
+
+                // Same-directory (or pathless) shard / _Canvas stem match (e.g. Item_000.wz when Item.wz is open)
+                if ((!targetDir || !aDir || targetDir === aDir) && this.isSameOrCanvasStem(targetStem, aStem)) {
+                    return a;
+                }
+
+                // Check all linked file paths belonging to this open archive
+                const linkedPaths = a.linkedFilePaths || [];
+                for (const lp of linkedPaths) {
+                    const normLp = this.normalizePathForCompare(lp);
+                    if (normLp === normTarget) {
+                        return a;
+                    }
+                    const lpFile = normLp.split('/').pop() || '';
+                    if (!targetDir && lpFile === cleanName) {
+                        return a;
+                    }
+                    const lpDir = this.getDirPart(normLp);
+                    const lpStem = lpFile.endsWith('.wz') ? lpFile.slice(0, -3) : lpFile;
+                    if (targetDir && lpDir === targetDir && this.isSameOrCanvasStem(targetStem, lpStem)) {
+                        return a;
+                    }
+                }
+
+                // Parent / subdirectory containment (e.g. Cash_000.wz inside Data/Item when Data/Item/Item.wz is open, or vice versa)
+                if (aDir && targetDir) {
+                    if (targetDir.startsWith(`${aDir}/`)) {
+                        return a;
+                    }
+                    if (aDir.startsWith(`${targetDir}/`)) {
+                        const targetFolderName = targetDir.split('/').pop() || '';
+                        if (targetFolderName === targetBaseStem) {
+                            return a;
+                        }
+                    }
+                }
+            }
+
+            return undefined;
         }
 
         private clearArchiveTreeCache(archiveId: string): void {
@@ -2255,7 +2556,7 @@ namespace MapleRepacker {
             this.treeState.expandedKeys.add(this.makeCacheKey(archiveId, ''));
         }
 
-        private confirmReloadArchive(existing: ArchiveSummaryDto): Promise<boolean> {
+        private confirmReloadArchive(existing: ArchiveSummaryDto, requestedPathOrName?: string): Promise<boolean> {
             return new Promise<boolean>((resolve) => {
                 let settled = false;
                 const finish = (confirmed: boolean) => {
@@ -2266,6 +2567,12 @@ namespace MapleRepacker {
                     resolve(confirmed);
                 };
 
+                const reqBase = (requestedPathOrName || '').trim().split(/[\\/]/).pop() || existing.name;
+                const isSameFile = reqBase.toLowerCase() === existing.name.toLowerCase();
+                const openDescription = isSameFile
+                    ? `<strong>${this.escapeHtml(existing.name)}</strong> is already open in the workspace.`
+                    : `<strong>${this.escapeHtml(reqBase)}</strong> is already open in the workspace (linked with <strong>${this.escapeHtml(existing.name)}</strong>).`;
+
                 const hasUnsaved = Boolean(existing.isModified || existing.isAdded);
                 const unsavedNote = hasUnsaved
                     ? `<p style="margin: 8px 0 0; color: var(--amber); font-size: 12px;">Warning: This archive has unsaved changes that will be discarded if you reload it.</p>`
@@ -2275,7 +2582,7 @@ namespace MapleRepacker {
                     `Archive Already Open`,
                     `
                     <p style="margin: 0; color: var(--text-primary); line-height: 1.5;">
-                        <strong>${this.escapeHtml(existing.name)}</strong> is already open in the workspace.
+                        ${openDescription}
                         Do you want to reload it and replace the currently open archive?
                     </p>
                     ${unsavedNote}
@@ -2321,7 +2628,7 @@ namespace MapleRepacker {
             for (const filePath of filePaths) {
                 const existing = this.findExistingOpenArchive(filePath);
                 if (existing) {
-                    const confirmed = await this.confirmReloadArchive(existing);
+                    const confirmed = await this.confirmReloadArchive(existing, filePath);
                     if (!confirmed) {
                         continue;
                     }

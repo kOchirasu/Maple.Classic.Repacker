@@ -230,6 +230,9 @@ public sealed class RepackerEngineTests {
         NodeInspectionDto updatedLevel = workspace.InspectNode(charArchiveId, "Coat/01040000.img/info/reqLevel");
         Assert.Equal("25", updatedLevel.DisplayValue);
         Assert.True(updatedLevel.CanUndo);
+        Assert.Equal(0, updatedLevel.ChildCount);
+        Assert.Contains(updatedLevel.Children, c => c.Name == "islot" && c.Path == "Coat/01040000.img/info/islot");
+        Assert.Contains(updatedLevel.Children, c => c.Name == "reqLevel" && c.Path == "Coat/01040000.img/info/reqLevel");
 
         (bool undoOk, string? undoErr) = workspace.Undo(charArchiveId, "Coat/01040000.img/info/reqLevel");
         Assert.True(undoOk, undoErr);
@@ -438,6 +441,47 @@ public sealed class RepackerEngineTests {
                 TreeNodeDto[] coatKids = ws.GetTreeChildren(single.ArchiveId, "Coat");
                 Assert.Contains(coatKids, n => n.Name == "01040000.img");
             }
+
+            // Test E: OpenArchiveFromBytes resolves disk path via hintPaths and links String_000.wz and Character subdirs
+            using (var ws = new RepackerWorkspace()) {
+                byte[] strStubBytes = System.IO.File.ReadAllBytes(Path.Combine(stringDir, "String.wz"));
+                ArchiveSummaryDto strSummary = ws.OpenArchiveFromBytes("String.wz", strStubBytes, filePath: null, version: null, hintPaths: [tempRoot]);
+                Assert.Equal(1, strSummary.ImageCount);
+                Assert.Contains(ws.GetTreeChildren(strSummary.ArchiveId, ""), n => n.Name == "Eqp.img");
+
+                byte[] charStubBytes = System.IO.File.ReadAllBytes(charWzPath);
+                ArchiveSummaryDto charSummary = ws.OpenArchiveFromBytes("Character.wz", charStubBytes, filePath: null, version: null, hintPaths: [tempRoot]);
+                Assert.Equal((ushort) 779, charSummary.Version);
+                Assert.True(charSummary.ImageCount >= 3);
+                TreeNodeDto[] rootDirs = ws.GetTreeChildren(charSummary.ArchiveId, "");
+                Assert.Contains(rootDirs, n => n.Name == "Coat" && n.HasChildren);
+                Assert.Contains(rootDirs, n => n.Name == "Weapon" && n.HasChildren);
+            }
+
+            // Test F: Opening a shard or child .wz file that is already linked through an open archive is detected as reopening
+            using (var ws = new RepackerWorkspace()) {
+                string stringWzPath = Path.Combine(stringDir, "String.wz");
+                string string000Path = Path.Combine(stringDir, "String_000.wz");
+
+                ArchiveSummaryDto str1 = ws.OpenArchiveFromFile(stringWzPath);
+                Assert.NotNull(str1.LinkedFilePaths);
+                Assert.Contains(str1.LinkedFilePaths, p => p.EndsWith("String_000.wz", StringComparison.OrdinalIgnoreCase));
+
+                ArchiveSummaryDto str2 = ws.OpenArchiveFromFile(string000Path);
+                Assert.Equal(str1.ArchiveId, str2.ArchiveId);
+                Assert.Equal("String.wz", str2.Name);
+                Assert.Single(ws.GetArchiveSummaries());
+
+                string coat000Path = Path.Combine(coatDir, "Coat_000.wz");
+                ArchiveSummaryDto char1 = ws.OpenArchiveFromFile(charWzPath);
+                Assert.NotNull(char1.LinkedFilePaths);
+                Assert.Contains(char1.LinkedFilePaths, p => p.EndsWith("Coat_000.wz", StringComparison.OrdinalIgnoreCase));
+
+                ArchiveSummaryDto char2 = ws.OpenArchiveFromFile(coat000Path);
+                Assert.Equal(char1.ArchiveId, char2.ArchiveId);
+                Assert.Equal("Character.wz", char2.Name);
+                Assert.Equal(2, ws.GetArchiveSummaries().Length);
+            }
         } finally {
             if (Directory.Exists(tempRoot)) {
                 Directory.Delete(tempRoot, recursive: true);
@@ -481,20 +525,15 @@ public sealed class RepackerEngineTests {
             bw.Write(0u); // placeholder offset
         }
 
-        // Write empty child directory table (count = 0) for each directory entry
-        var targetPositions = new uint[dirNames.Count];
-        for (int i = 0; i < dirNames.Count; i++) {
-            targetPositions[i] = (uint) ms.Position;
-            bw.Write((sbyte) 0);
-        }
-
+        // Match real MSCW directory-only index .wz files where the file ends right after the root table
+        uint eofPos = (uint) ms.Position;
         byte[] bytes = ms.ToArray();
         Span<byte> span = bytes;
         System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(span.Slice(4, 8), (ulong) (bytes.Length - (int) fstart));
 
         for (int i = 0; i < dirNames.Count; i++) {
             uint fieldPos = (uint) offsetPositions[i];
-            uint real = targetPositions[i];
+            uint real = eofPos;
             uint o = unchecked(fieldPos - fstart) ^ uint.MaxValue;
             o = unchecked(o * vh);
             o = unchecked(o - 0x581C3F6Du);

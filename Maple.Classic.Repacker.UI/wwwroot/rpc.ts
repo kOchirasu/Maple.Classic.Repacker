@@ -57,6 +57,7 @@ namespace MapleRepacker {
         modifiedImageCount: number;
         isModified: boolean;
         isAdded?: boolean;
+        linkedFilePaths?: string[];
     }
 
     export interface TreeNodeDto {

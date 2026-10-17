@@ -316,7 +316,11 @@ public class Program {
                         req.FileName ?? "Uploaded.wz",
                         req.Data,
                         req.FilePath,
-                        req.Version);
+                        req.Version,
+                        settingsStore.GetRecentPaths());
+                    if (!string.IsNullOrWhiteSpace(summary.FilePath)) {
+                        settingsStore.RecordRecentPath(summary.FilePath);
+                    }
                     return (true, new RpcOperationResponse(
                         Ok: true,
                         ArchiveId: summary.ArchiveId,

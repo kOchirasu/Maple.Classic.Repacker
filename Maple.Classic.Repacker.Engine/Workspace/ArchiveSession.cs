@@ -43,6 +43,7 @@ public sealed class ArchiveSession : IDisposable {
 
     public bool IsModified => HasStructureChanges || modifiedImages.Count > 0;
     public int ModifiedImageCount => modifiedImages.Count;
+    public int LinkedArchiveCount => linkedArchives.Count;
 
     public ArchiveSession(string archiveId, string name, string filePath, WzArchive archive, ushort? version = null) {
         ArchiveId = archiveId;
@@ -62,6 +63,10 @@ public sealed class ArchiveSession : IDisposable {
                 EnsureDirectoryLinkedWithChildren(VirtualRoot);
             }
         }
+    }
+
+    public string[] GetLinkedFilePaths() {
+        return [.. openedArchivePaths.OrderBy(static p => p, StringComparer.OrdinalIgnoreCase)];
     }
 
     public bool HasLinkedFile(string filePath) {
@@ -84,6 +89,22 @@ public sealed class ArchiveSession : IDisposable {
         }
 
         string rootDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(VirtualRoot.DiskDirectoryPath));
+        string? fileDir = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(fileDir)) {
+            string normFileDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(fileDir));
+            if (string.Equals(rootDir, normFileDir, StringComparison.OrdinalIgnoreCase)) {
+                string rootStem = StripNumericShardSuffix(Path.GetFileNameWithoutExtension(Name));
+                string candidateStem = StripNumericShardSuffix(Path.GetFileNameWithoutExtension(fullPath));
+                if (IsSameOrCanvasStem(rootStem, candidateStem)) {
+                    return true;
+                }
+            }
+        }
+
+        if (IsInsideAnyVirtualChildDirectory(VirtualRoot, fullPath)) {
+            return true;
+        }
+
         string rootPrefix = rootDir + Path.DirectorySeparatorChar;
         if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase)) {
             return false;
@@ -98,6 +119,35 @@ public sealed class ArchiveSession : IDisposable {
         string firstSubDir = rel[..firstSep];
         return VirtualRoot.Children.Any(c =>
             c.IsDir && string.Equals(c.Name, firstSubDir, StringComparison.OrdinalIgnoreCase));
+    }
+
+    public static bool IsSameOrCanvasStem(string stemA, string stemB) {
+        string baseA = StripNumericShardSuffix(stemA);
+        string baseB = StripNumericShardSuffix(stemB);
+        return string.Equals(baseA, baseB, StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(baseA, $"{baseB}_Canvas", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(baseA, $"{baseB}__Canvas", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(baseB, $"{baseA}_Canvas", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(baseB, $"{baseA}__Canvas", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsInsideAnyVirtualChildDirectory(VirtualFsNode node, string fullFilePath) {
+        foreach (VirtualFsNode child in node.Children) {
+            if (!child.IsDir) {
+                continue;
+            }
+            if (!string.IsNullOrEmpty(child.DiskDirectoryPath)) {
+                string childDir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(child.DiskDirectoryPath));
+                string childPrefix = childDir + Path.DirectorySeparatorChar;
+                if (fullFilePath.StartsWith(childPrefix, StringComparison.OrdinalIgnoreCase)) {
+                    return true;
+                }
+            }
+            if (IsInsideAnyVirtualChildDirectory(child, fullFilePath)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public static string StripNumericShardSuffix(string stem) {
@@ -138,6 +188,12 @@ public sealed class ArchiveSession : IDisposable {
                 continue;
             }
 
+            string nestedStemSubDir = Path.Combine(diskDir, dirStem, child.Name);
+            if (Directory.Exists(nestedStemSubDir)) {
+                child.DiskDirectoryPath = nestedStemSubDir;
+                continue;
+            }
+
             // If this is a root archive inside Data/<Stem>/<Stem>.wz (such as Data/Base/Base.wz),
             // DIR nodes like "Character", "Map", "String" live in sibling directories Data/<ChildName>.
             if (isRoot &&
@@ -154,14 +210,17 @@ public sealed class ArchiveSession : IDisposable {
         }
     }
 
-    public bool EnsureDirectoryLinkedWithChildren(VirtualFsNode dirNode) {
+    public bool EnsureDirectoryLinkedWithChildren(VirtualFsNode dirNode, int maxDepth = 3) {
         if (!dirNode.IsDir) {
             return false;
         }
         bool changed = EnsureDirectoryLinked(dirNode);
+        if (maxDepth <= 0) {
+            return changed;
+        }
         for (int i = 0; i < dirNode.Children.Count; i++) {
             VirtualFsNode child = dirNode.Children[i];
-            if (child.IsDir && EnsureDirectoryLinked(child)) {
+            if (child.IsDir && EnsureDirectoryLinkedWithChildren(child, maxDepth - 1)) {
                 changed = true;
             }
         }
@@ -377,7 +436,8 @@ public sealed class ArchiveSession : IDisposable {
             imgs,
             modifiedImages.Count,
             !IsUserCreatedArchive && IsModified,
-            IsUserCreatedArchive);
+            IsUserCreatedArchive,
+            GetLinkedFilePaths());
     }
 
     public static (int Directories, int Images) CountVirtualRecursive(VirtualFsNode root) {

@@ -51,7 +51,8 @@ public sealed record ArchiveSummaryDto(
     int ImageCount,
     int ModifiedImageCount,
     bool IsModified,
-    bool IsAdded = false);
+    bool IsAdded = false,
+    string[]? LinkedFilePaths = null);
 
 public sealed record TreeNodeDto(
     string ArchiveId,
