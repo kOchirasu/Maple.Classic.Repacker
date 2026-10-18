@@ -25,7 +25,7 @@ namespace Maple.Classic.Repacker.Engine.Workspace;
 /// Each <c>Unsafe</c> member calls <see cref="AssertLockHeld"/> so violations fail fast in Debug builds.
 /// </remarks>
 public sealed class RepackerWorkspace : IDisposable {
-    private const int MaxLogEntries = 1000;
+    private const int MAX_LOG_ENTRIES = 1000;
 
     private readonly Lock syncLock = new();
     private readonly List<ArchiveSession> archives = [];
@@ -74,7 +74,7 @@ public sealed class RepackerWorkspace : IDisposable {
     /// Compiled out of Release builds.
     /// </summary>
     [Conditional("DEBUG")]
-    private void AssertLockHeld([System.Runtime.CompilerServices.CallerMemberName] string caller = "") {
+    private void AssertLockHeld([CallerMemberName] string caller = "") {
         Debug.Assert(syncLock.IsHeldByCurrentThread, $"{caller} must be called while holding {nameof(syncLock)}.");
     }
 
@@ -87,8 +87,8 @@ public sealed class RepackerWorkspace : IDisposable {
             level,
             message);
         logs.Add(entry);
-        if (logs.Count > MaxLogEntries) {
-            logs.RemoveRange(0, logs.Count - MaxLogEntries);
+        if (logs.Count > MAX_LOG_ENTRIES) {
+            logs.RemoveRange(0, logs.Count - MAX_LOG_ENTRIES);
         }
     }
 
@@ -354,7 +354,7 @@ public sealed class RepackerWorkspace : IDisposable {
         return opened;
     }
 
-    public ArchiveSummaryDto CreateNewArchive(string name, ushort version = WzArchive.DefaultVersion) {
+    public ArchiveSummaryDto CreateNewArchive(string name, ushort version = WzArchive.DEFAULT_VERSION) {
         string cleanName = string.IsNullOrWhiteSpace(name) ? $"NewArchive_{nextArchiveSeq}.wz" : name.Trim();
         if (!cleanName.EndsWith(".wz", StringComparison.OrdinalIgnoreCase)) {
             cleanName += ".wz";
@@ -1129,7 +1129,7 @@ public sealed class RepackerWorkspace : IDisposable {
             }
 
             WzValue.Canvas canvas = target.Value;
-            WzCanvasFormat targetFormat = format ?? (WzCanvasFormat) canvas.Format;
+            WzCanvasFormat targetFormat = format ?? canvas.Format;
             if (!Enum.IsDefined(targetFormat)) {
                 targetFormat = WzCanvasFormat.Bgra8888;
             }
@@ -1138,7 +1138,7 @@ public sealed class RepackerWorkspace : IDisposable {
             return EditImage(session, target.ImagePath, () => {
                 canvas.Width = width;
                 canvas.Height = height;
-                canvas.Format = (int) targetFormat;
+                canvas.Format = targetFormat;
                 canvas.Payload = compressed;
                 canvas.Properties.RemoveAll(static p => p.Name is "_outlink" or "_inlink");
                 return null;
@@ -1156,7 +1156,7 @@ public sealed class RepackerWorkspace : IDisposable {
             WzValue.Canvas canvas = target.Value;
             byte[] reencoded = WzCanvasCodec.EncodeFromRgba(canvas.Width, canvas.Height, newFormat, WzCanvasCodec.DecodeToRgba(canvas));
             return EditImage(session, target.ImagePath, () => {
-                canvas.Format = (int) newFormat;
+                canvas.Format = newFormat;
                 canvas.Payload = reencoded;
                 return null;
             }, () => $"Converted Canvas \"{path}\" to {newFormat.GetDisplayName()} ({reencoded.Length:N0} B).");
@@ -1577,11 +1577,11 @@ public sealed class RepackerWorkspace : IDisposable {
         WzCanvasFormat fmt = canvasFormat ?? WzCanvasFormat.Bgra8888;
         if (binaryPayload is { Length: > 0 }) {
             (int w, int h, byte[] comp) = WzCanvasCodec.EncodePngToCanvasPayload(binaryPayload, fmt);
-            return new WzValue.Canvas(w, h, (int) fmt, comp, [new WzProperty("origin", (vecX ?? w / 2, vecY ?? h))]);
+            return new WzValue.Canvas(w, h, fmt, comp, [new WzProperty("origin", (vecX ?? w / 2, vecY ?? h))]);
         }
         const int blankSize = 32;
         byte[] blank = WzCanvasCodec.EncodeFromRgba(blankSize, blankSize, fmt, new byte[blankSize * blankSize * 4]);
-        return new WzValue.Canvas(blankSize, blankSize, (int) fmt, blank, [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
+        return new WzValue.Canvas(blankSize, blankSize, fmt, blank, [new WzProperty("origin", (vecX ?? 16, vecY ?? 32))]);
     }
 
     /// <summary>The directory a new .img or directory goes into: the path itself, or the directory of the .img it is inside.</summary>

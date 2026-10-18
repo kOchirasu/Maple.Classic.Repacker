@@ -24,13 +24,10 @@ public static class JsonWzCodec {
             case JsonValueKind.Null:
             case JsonValueKind.Undefined:
                 return WzValue.Null.Instance;
-
             case JsonValueKind.True:
                 return new WzValue.Int(1);
-
             case JsonValueKind.False:
                 return new WzValue.Int(0);
-
             case JsonValueKind.String: {
                 string s = el.GetString() ?? string.Empty;
                 if (existing is WzValue.Uol) {
@@ -38,7 +35,6 @@ public static class JsonWzCodec {
                 }
                 return new WzValue.String(s);
             }
-
             case JsonValueKind.Number: {
                 string rawText = el.GetRawText();
                 bool hasDecimalOrExp = rawText.Contains('.') || rawText.Contains('e') || rawText.Contains('E');
@@ -61,7 +57,6 @@ public static class JsonWzCodec {
                 }
                 return new WzValue.Float((float) dVal);
             }
-
             case JsonValueKind.Array: {
                 var items = new List<WzValue>();
                 WzValue.Convex? existingConvex = existing as WzValue.Convex;
@@ -75,10 +70,8 @@ public static class JsonWzCodec {
                 }
                 return new WzValue.Convex(items);
             }
-
             case JsonValueKind.Object:
                 return ConvertObject(el, existing);
-
             default:
                 return WzValue.Null.Instance;
         }
@@ -100,12 +93,12 @@ public static class JsonWzCodec {
             WzValue.Canvas? prevCanvas = existing as WzValue.Canvas;
             int width = obj.TryGetProperty("width", out JsonElement wEl) && wEl.TryGetInt32(out int w) ? w : (prevCanvas?.Width ?? 1);
             int height = obj.TryGetProperty("height", out JsonElement hEl) && hEl.TryGetInt32(out int h) ? h : (prevCanvas?.Height ?? 1);
-            int format = obj.TryGetProperty("format", out JsonElement fEl) && fEl.TryGetInt32(out int f) ? f : (prevCanvas?.Format ?? (int) WzCanvasFormat.Bgra8888);
+            WzCanvasFormat format = obj.TryGetProperty("format", out JsonElement fEl) && fEl.TryGetInt32(out int f) ? (WzCanvasFormat) f : prevCanvas?.Format ?? WzCanvasFormat.Bgra8888;
 
             ReadOnlyMemory<byte> payload = prevCanvas?.Payload ?? ReadOnlyMemory<byte>.Empty;
             if (payload.IsEmpty) {
                 byte[] blankRgba = new byte[Math.Max(1, width) * Math.Max(1, height) * 4];
-                payload = WzCanvasCodec.EncodeFromRgba(Math.Max(1, width), Math.Max(1, height), (WzCanvasFormat) format, blankRgba);
+                payload = WzCanvasCodec.EncodeFromRgba(Math.Max(1, width), Math.Max(1, height), format, blankRgba);
             }
 
             var children = new List<WzProperty>();
@@ -161,10 +154,10 @@ public static class JsonWzCodec {
             if (count > 2) {
                 return false;
             }
-            if (prop.Name == "x" && prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out int px)) {
+            if (prop is {Name: "x", Value.ValueKind: JsonValueKind.Number} && prop.Value.TryGetInt32(out int px)) {
                 x = px;
                 hasX = true;
-            } else if (prop.Name == "y" && prop.Value.ValueKind == JsonValueKind.Number && prop.Value.TryGetInt32(out int py)) {
+            } else if (prop is {Name: "y", Value.ValueKind: JsonValueKind.Number} && prop.Value.TryGetInt32(out int py)) {
                 y = py;
                 hasY = true;
             } else {

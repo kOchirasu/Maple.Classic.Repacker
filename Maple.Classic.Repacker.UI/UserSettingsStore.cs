@@ -45,7 +45,7 @@ public sealed class UserSettingsStore {
 
     private readonly Lock syncLock = new();
     private readonly string settingsFilePath;
-    private PersistedRepackerSettings settings;
+    private readonly PersistedRepackerSettings settings;
 
     public UserSettingsStore(string? customPath = null) {
         settingsFilePath = customPath ?? ResolveDefaultSettingsFilePath();
@@ -130,22 +130,22 @@ public sealed class UserSettingsStore {
             SavedRepackerLayoutDto? mergedLayout = cur.Layout;
             if (patch.Layout is not null) {
                 SavedRepackerLayoutDto baseLayout = cur.Layout ?? new SavedRepackerLayoutDto();
-                mergedLayout = baseLayout with {
+                mergedLayout = new SavedRepackerLayoutDto {
                     TreePaneWidth = patch.Layout.TreePaneWidth ?? baseLayout.TreePaneWidth,
                     InspectorPaneWidth = patch.Layout.InspectorPaneWidth ?? baseLayout.InspectorPaneWidth,
                     InspectorCollapsed = patch.Layout.InspectorCollapsed ?? baseLayout.InspectorCollapsed,
                     WorkbenchHeight = patch.Layout.WorkbenchHeight ?? baseLayout.WorkbenchHeight,
-                    WorkbenchCollapsed = patch.Layout.WorkbenchCollapsed ?? baseLayout.WorkbenchCollapsed,
+                    WorkbenchCollapsed = patch.Layout.WorkbenchCollapsed ?? baseLayout.WorkbenchCollapsed
                 };
             }
 
-            settings.UiState = cur with {
+            settings.UiState = new SavedRepackerUiStateDto {
                 Layout = mergedLayout,
                 ActiveWorkbenchTab = patch.ActiveWorkbenchTab ?? cur.ActiveWorkbenchTab,
                 CanvasBackground = patch.CanvasBackground ?? cur.CanvasBackground,
                 ShowOriginCrosshair = patch.ShowOriginCrosshair ?? cur.ShowOriginCrosshair,
                 ShowVectorBounds = patch.ShowVectorBounds ?? cur.ShowVectorBounds,
-                ShowPixelGrid = patch.ShowPixelGrid ?? cur.ShowPixelGrid,
+                ShowPixelGrid = patch.ShowPixelGrid ?? cur.ShowPixelGrid
             };
             SaveToDiskUnsafe();
         }

@@ -58,7 +58,7 @@ public sealed class RepackerEngineTests {
         byte[] compressed = WzCanvasCodec.EncodeFromRgba(width, height, format, rgba);
         Assert.NotEmpty(compressed);
 
-        var canvasVal = new WzValue.Canvas(width, height, (int) format, compressed);
+        var canvasVal = new WzValue.Canvas(width, height, format, compressed);
         byte[] decoded = WzCanvasCodec.DecodeToRgba(canvasVal);
         Assert.Equal(width * height * 4, decoded.Length);
 
@@ -125,7 +125,7 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void RepackerWorkspace_SupportsFullInspectionCrudSearchAndRepack() {
-        using var workspace = NewWorkspace();
+        using RepackerWorkspace workspace = NewWorkspace();
 
         byte[] sprite36 = new byte[36 * 36 * 4];
         Array.Fill(sprite36, (byte) 200);
@@ -134,51 +134,55 @@ public sealed class RepackerEngineTests {
 
         byte[] charBytes;
         using (var charWz = new WzArchive()) {
-            var coatImg = new WzValue.Object();
-            coatImg["info/islot"] = "Ma";
-            coatImg["info/reqLevel"] = new WzValue.Short(10);
+            var coatImg = new WzValue.Object {
+                ["info/islot"] = "Ma",
+                ["info/reqLevel"] = new WzValue.Short(10),
+            };
             for (int f = 0; f < 3; f++) {
                 coatImg[$"stand1/{f}/delay"] = 500;
                 coatImg[$"stand1/{f}/mail"] = new WzValue.Canvas(
                     36,
                     36,
-                    (int) WzCanvasFormat.Bgra8888,
+                    WzCanvasFormat.Bgra8888,
                     encoded36,
                     [new WzProperty("origin", (18, 18))]);
             }
             charWz.SetImage("Coat/01040000.img", coatImg);
 
-            var petImg = new WzValue.Object();
-            petImg["5002828/stand0/0"] = new WzValue.Canvas(
-                1,
-                1,
-                (int) WzCanvasFormat.Bgra4444,
-                dummy1x1,
-                [
-                    new WzProperty("origin", (18, 32)),
-                    new WzProperty("_outlink", "Character/PetEquip/_Canvas/01802653.img/5002828/stand0/0"),
-                ]);
+            var petImg = new WzValue.Object {
+                ["5002828/stand0/0"] = new WzValue.Canvas(
+                    1,
+                    1,
+                    WzCanvasFormat.Bgra4444,
+                    dummy1x1,
+                    [
+                        new WzProperty("origin", (18, 32)),
+                        new WzProperty("_outlink", "Character/PetEquip/_Canvas/01802653.img/5002828/stand0/0"),
+                    ]),
+            };
             charWz.SetImage("PetEquip/01802653.img", petImg);
             charBytes = charWz.ToBytes();
         }
 
         byte[] charCanvasBytes;
         using (var canvasWz = new WzArchive()) {
-            var petCanvasImg = new WzValue.Object();
-            petCanvasImg["5002828/stand0/0"] = new WzValue.Canvas(
-                36,
-                36,
-                (int) WzCanvasFormat.Bgra8888,
-                encoded36,
-                [new WzProperty("origin", (18, 32))]);
+            var petCanvasImg = new WzValue.Object {
+                ["5002828/stand0/0"] = new WzValue.Canvas(
+                    36,
+                    36,
+                    WzCanvasFormat.Bgra8888,
+                    encoded36,
+                    [new WzProperty("origin", (18, 32))]),
+            };
             canvasWz.SetImage("PetEquip/_Canvas/01802653.img", petCanvasImg);
             charCanvasBytes = canvasWz.ToBytes();
         }
 
         byte[] stringBytes;
         using (var strWz = new WzArchive()) {
-            var mobImg = new WzValue.Object();
-            mobImg["100100/name"] = "Snail";
+            var mobImg = new WzValue.Object {
+                ["100100/name"] = "Snail",
+            };
             strWz.SetImage("Mob.img", mobImg);
             stringBytes = strWz.ToBytes();
         }
@@ -191,10 +195,10 @@ public sealed class RepackerEngineTests {
 
         // 1. Expand tree down to Coat/01040000.img/stand1/0/mail
         TreeNodeDto[] rootChildren = workspace.GetTreeChildren(charArchiveId, "");
-        Assert.Contains(rootChildren, n => n.Name == "Coat" && n.NodeKind == RepackerNodeKind.Directory);
+        Assert.Contains(rootChildren, n => n is {Name: "Coat", NodeKind: RepackerNodeKind.Directory});
 
         TreeNodeDto[] coatChildren = workspace.GetTreeChildren(charArchiveId, "Coat");
-        Assert.Contains(coatChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
+        Assert.Contains(coatChildren, n => n is {Name: "01040000.img", NodeKind: RepackerNodeKind.Image});
 
         // 2. Inspect Canvas node with _outlink resolution across Character_Canvas_000.wz
         NodeInspectionDto outlinkNode = Inspect(workspace, charArchiveId, "PetEquip/01802653.img/5002828/stand0/0");
@@ -227,17 +231,15 @@ public sealed class RepackerEngineTests {
             charArchiveId,
             "Coat/01040000.img/info/reqLevel",
             RepackerPropertyKind.Short,
-            "25",
-            null,
-            null);
+            "25");
         Assert.Null(updateErr);
 
         NodeInspectionDto updatedLevel = Inspect(workspace, charArchiveId, "Coat/01040000.img/info/reqLevel");
         Assert.Equal("25", updatedLevel.DisplayValue);
         Assert.True(Archive(workspace, charArchiveId).CanUndo);
         Assert.Equal(0, updatedLevel.ChildCount);
-        Assert.Contains(updatedLevel.Children, c => c.Name == "islot" && c.Path == "Coat/01040000.img/info/islot");
-        Assert.Contains(updatedLevel.Children, c => c.Name == "reqLevel" && c.Path == "Coat/01040000.img/info/reqLevel");
+        Assert.Contains(updatedLevel.Children, c => c is {Name: "islot", Path: "Coat/01040000.img/info/islot"});
+        Assert.Contains(updatedLevel.Children, c => c is {Name: "reqLevel", Path: "Coat/01040000.img/info/reqLevel"});
 
         (string? undoErr, _) = workspace.Undo(charArchiveId);
         Assert.Null(undoErr);
@@ -350,12 +352,13 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void FailedEdits_DoNotLeaveUndoEntries() {
-        using var workspace = NewWorkspace();
+        using RepackerWorkspace workspace = NewWorkspace();
         byte[] archiveBytes;
         using (var wz = new WzArchive()) {
-            var img = new WzValue.Object();
-            img["info/islot"] = "Ma";
-            img["info/reqLevel"] = new WzValue.Short(10);
+            var img = new WzValue.Object {
+                ["info/islot"] = "Ma",
+                ["info/reqLevel"] = new WzValue.Short(10),
+            };
             wz.SetImage("Coat/01040000.img", img);
             archiveBytes = wz.ToBytes();
         }
@@ -376,7 +379,7 @@ public sealed class RepackerEngineTests {
         Assert.Equal(RepackerChangeState.Unchanged, Inspect(workspace, archiveId, reqLevel).ChangeState);
 
         // A successful edit records exactly one step, and undo returns the node it touched
-        Assert.Null(workspace.SetPropertyValue(archiveId, reqLevel, RepackerPropertyKind.Short, "25", null, null));
+        Assert.Null(workspace.SetPropertyValue(archiveId, reqLevel, RepackerPropertyKind.Short, "25"));
         (string? undoErr, string affected) = workspace.Undo(archiveId);
         Assert.Null(undoErr);
         Assert.Equal("Coat/01040000.img", affected);
@@ -386,11 +389,12 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void AddingNodes_ImportsFromFiles() {
-        using var workspace = NewWorkspace();
+        using RepackerWorkspace workspace = NewWorkspace();
         byte[] archiveBytes;
         using (var wz = new WzArchive()) {
-            var img = new WzValue.Object();
-            img["info/islot"] = "Ma";
+            var img = new WzValue.Object {
+                ["info/islot"] = "Ma",
+            };
             wz.SetImage("Coat/01040000.img", img);
             archiveBytes = wz.ToBytes();
         }
@@ -419,8 +423,9 @@ public sealed class RepackerEngineTests {
         Assert.NotNull(Inspect(workspace, archiveId, soundPath).Preview.Sound);
 
         // .img from raw image bytes, and from an exported JSON subtree
-        var sourceImg = new WzValue.Object();
-        sourceImg["info/reqLevel"] = new WzValue.Short(30);
+        var sourceImg = new WzValue.Object {
+            ["info/reqLevel"] = new WzValue.Short(30),
+        };
         (string? rawErr, string rawPath) = workspace.AddImage(archiveId, "Coat", "01040002.img", rawImgBytes: sourceImg.ToBytes());
         Assert.Null(rawErr);
         Assert.Equal("30", Inspect(workspace, archiveId, $"{rawPath}/info/reqLevel").DisplayValue);
@@ -456,8 +461,9 @@ public sealed class RepackerEngineTests {
                 emptyWz.Save(Path.Combine(stringDir, "String.wz"));
             }
             using (var stringShard = new WzArchive()) {
-                var eqpImg = new WzValue.Object();
-                eqpImg["Eqp/Coat/1040000/name"] = "White Undershirt";
+                var eqpImg = new WzValue.Object {
+                    ["Eqp/Coat/1040000/name"] = "White Undershirt",
+                };
                 stringShard.SetImage("Eqp.img", eqpImg);
                 stringShard.Save(Path.Combine(stringDir, "String_000.wz"));
             }
@@ -472,13 +478,14 @@ public sealed class RepackerEngineTests {
             }
             byte[] encodedSprite = WzCanvasCodec.EncodeFromRgba(24, 20, WzCanvasFormat.Bgra8888, rgba);
             using (var coatCanvasWz = new WzArchive()) {
-                var canvasImg = new WzValue.Object();
-                canvasImg["stand1/0/mail"] = new WzValue.Canvas(
-                    24,
-                    20,
-                    (int) WzCanvasFormat.Bgra8888,
-                    encodedSprite,
-                    [new WzProperty("origin", (11, 19))]);
+                var canvasImg = new WzValue.Object {
+                    ["stand1/0/mail"] = new WzValue.Canvas(
+                        24,
+                        20,
+                        WzCanvasFormat.Bgra8888,
+                        encodedSprite,
+                        [new WzProperty("origin", (11, 19))]),
+                };
                 coatCanvasWz.SetImage("01040000.img", canvasImg);
                 coatCanvasWz.Save(Path.Combine(coatCanvasDir, "_Canvas_000.wz"));
             }
@@ -486,25 +493,27 @@ public sealed class RepackerEngineTests {
             // 3. Write Data/Character/Coat/Coat.wz (empty DIR "_Canvas") + Coat_000.wz (01040000.img with _outlink)
             System.IO.File.WriteAllBytes(Path.Combine(coatDir, "Coat.wz"), BuildDirectoryOnlyWzArchive(["_Canvas"]));
             using (var coatShard = new WzArchive()) {
-                var coatImg = new WzValue.Object();
-                coatImg["info/islot"] = "Ma";
-                coatImg["stand1/0/mail"] = new WzValue.Canvas(
-                    1,
-                    1,
-                    (int) WzCanvasFormat.Bgra4444,
-                    WzCanvasCodec.EncodeFromRgba(1, 1, WzCanvasFormat.Bgra4444, [0, 0, 0, 0]),
-                    [
-                        new WzProperty("origin", (11, 19)),
-                        new WzProperty("_outlink", "Character/Coat/_Canvas/01040000.img/stand1/0/mail"),
-                    ]);
+                var coatImg = new WzValue.Object {
+                    ["info/islot"] = "Ma",
+                    ["stand1/0/mail"] = new WzValue.Canvas(
+                        1,
+                        1,
+                        WzCanvasFormat.Bgra4444,
+                        WzCanvasCodec.EncodeFromRgba(1, 1, WzCanvasFormat.Bgra4444, [0, 0, 0, 0]),
+                        [
+                            new WzProperty("origin", (11, 19)),
+                            new WzProperty("_outlink", "Character/Coat/_Canvas/01040000.img/stand1/0/mail"),
+                        ]),
+                };
                 coatShard.SetImage("01040000.img", coatImg);
                 coatShard.Save(Path.Combine(coatDir, "Coat_000.wz"));
             }
 
             // 4. Write Data/Character/Weapon/Weapon_000.wz
             using (var weaponShard = new WzArchive()) {
-                var weaponImg = new WzValue.Object();
-                weaponImg["info/islot"] = "Wp";
+                var weaponImg = new WzValue.Object {
+                    ["info/islot"] = "Wp",
+                };
                 weaponShard.SetImage("01302000.img", weaponImg);
                 weaponShard.Save(Path.Combine(weaponDir, "Weapon_000.wz"));
             }
@@ -517,14 +526,15 @@ public sealed class RepackerEngineTests {
             string baseWzPath = Path.Combine(baseDir, "Base.wz");
             System.IO.File.WriteAllBytes(baseWzPath, BuildDirectoryOnlyWzArchive(["Character", "String"]));
             using (var baseShard = new WzArchive()) {
-                var pddImg = new WzValue.Object();
-                pddImg["info/version"] = 1;
+                var pddImg = new WzValue.Object {
+                    ["info/version"] = 1,
+                };
                 baseShard.SetImage("StandardPDD.img", pddImg);
                 baseShard.Save(Path.Combine(baseDir, "Base_000.wz"));
             }
 
             // Test A: Opening Character.wz directly auto-links Coat, Coat/_Canvas, and Weapon
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 ArchiveSummaryDto charSummary = ws.OpenArchiveFromFile(charWzPath);
                 Assert.True(charSummary.ImageCount >= 2);
 
@@ -535,12 +545,12 @@ public sealed class RepackerEngineTests {
                 Assert.True(weaponNode.ChildCount > 0);
 
                 TreeNodeDto[] coatChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat");
-                Assert.Contains(coatChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
-                TreeNodeDto canvasDirNode = Assert.Single(coatChildren, n => n.Name == "_Canvas" && n.NodeKind == RepackerNodeKind.Directory);
+                Assert.Contains(coatChildren, n => n is {Name: "01040000.img", NodeKind: RepackerNodeKind.Image});
+                TreeNodeDto canvasDirNode = Assert.Single(coatChildren, n => n is {Name: "_Canvas", NodeKind: RepackerNodeKind.Directory});
                 Assert.True(canvasDirNode.ChildCount > 0);
 
                 TreeNodeDto[] canvasChildren = ws.GetTreeChildren(charSummary.ArchiveId, "Coat/_Canvas");
-                Assert.Contains(canvasChildren, n => n.Name == "01040000.img" && n.NodeKind == RepackerNodeKind.Image);
+                Assert.Contains(canvasChildren, n => n is {Name: "01040000.img", NodeKind: RepackerNodeKind.Image});
 
                 // Verify _outlink inside Coat/01040000.img resolves to Coat/_Canvas/01040000.img
                 NodeInspectionDto mailInspect = Inspect(ws, charSummary.ArchiveId, "Coat/01040000.img/stand1/0/mail");
@@ -551,7 +561,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test B: Opening 63-byte String.wz directly auto-links String_000.wz
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 ArchiveSummaryDto strSummary = ws.OpenArchiveFromFile(Path.Combine(stringDir, "String.wz"));
                 Assert.Equal(1, strSummary.ImageCount);
                 TreeNodeDto[] strChildren = ws.GetTreeChildren(strSummary.ArchiveId, "");
@@ -561,21 +571,21 @@ public sealed class RepackerEngineTests {
             }
 
             // Test C: Opening Base/Base.wz directly auto-links sibling Character and String directories
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 ArchiveSummaryDto baseSummary = ws.OpenArchiveFromFile(baseWzPath);
                 TreeNodeDto[] baseChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "");
-                Assert.Contains(baseChildren, n => n.Name == "Character" && n.ChildCount > 0);
-                Assert.Contains(baseChildren, n => n.Name == "String" && n.ChildCount > 0);
+                Assert.Contains(baseChildren, n => n is {Name: "Character", ChildCount: > 0});
+                Assert.Contains(baseChildren, n => n is {Name: "String", ChildCount: > 0});
 
                 TreeNodeDto[] baseCharChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "Character");
-                Assert.Contains(baseCharChildren, n => n.Name == "Coat" && n.ChildCount > 0);
+                Assert.Contains(baseCharChildren, n => n is {Name: "Coat", ChildCount: > 0});
 
                 NodeInspectionDto eqpInspect = Inspect(ws, baseSummary.ArchiveId, "String/Eqp.img/Eqp/Coat/1040000/name");
                 Assert.Equal("White Undershirt", eqpInspect.DisplayValue);
             }
 
             // Test D: OpenDataDirectory on Data/Character opens Character.wz with linked subdirs instead of duplicate shard archives
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 ArchiveSummaryDto[] opened = ws.OpenDataDirectory(charDir);
                 ArchiveSummaryDto single = Assert.Single(opened);
                 Assert.Equal("Character.wz", single.Name);
@@ -584,20 +594,20 @@ public sealed class RepackerEngineTests {
             }
 
             // Test D2: OpenDataDirectory on root Data/ merges everything under Base.wz (not Base_000.wz)
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 ArchiveSummaryDto[] opened = ws.OpenDataDirectory(tempRoot);
                 ArchiveSummaryDto single = Assert.Single(opened);
                 Assert.Equal("Base.wz", single.Name);
                 Assert.Single(ws.GetArchiveSummaries());
 
                 TreeNodeDto[] baseRoot = ws.GetTreeChildren(single.ArchiveId, "");
-                Assert.Contains(baseRoot, n => n.Name == "StandardPDD.img" && n.NodeKind == RepackerNodeKind.Image);
-                Assert.Contains(baseRoot, n => n.Name == "Character" && n.NodeKind == RepackerNodeKind.Directory);
-                Assert.Contains(baseRoot, n => n.Name == "String" && n.NodeKind == RepackerNodeKind.Directory);
+                Assert.Contains(baseRoot, n => n is {Name: "StandardPDD.img", NodeKind: RepackerNodeKind.Image});
+                Assert.Contains(baseRoot, n => n is {Name: "Character", NodeKind: RepackerNodeKind.Directory});
+                Assert.Contains(baseRoot, n => n is {Name: "String", NodeKind: RepackerNodeKind.Directory});
             }
 
             // Test E: OpenArchiveFromBytes resolves disk path via hintPaths and links String_000.wz and Character subdirs
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 byte[] strStubBytes = System.IO.File.ReadAllBytes(Path.Combine(stringDir, "String.wz"));
                 ArchiveSummaryDto strSummary = ws.OpenArchiveFromBytes("String.wz", strStubBytes, filePath: null, version: null, hintPaths: [tempRoot]);
                 Assert.Equal(1, strSummary.ImageCount);
@@ -608,12 +618,12 @@ public sealed class RepackerEngineTests {
                 Assert.Equal((ushort) 779, charSummary.Version);
                 Assert.True(charSummary.ImageCount >= 3);
                 TreeNodeDto[] rootDirs = ws.GetTreeChildren(charSummary.ArchiveId, "");
-                Assert.Contains(rootDirs, n => n.Name == "Coat" && n.ChildCount > 0);
-                Assert.Contains(rootDirs, n => n.Name == "Weapon" && n.ChildCount > 0);
+                Assert.Contains(rootDirs, n => n is {Name: "Coat", ChildCount: > 0});
+                Assert.Contains(rootDirs, n => n is {Name: "Weapon", ChildCount: > 0});
             }
 
             // Test F: Opening a shard or child .wz file that is already linked through an open archive is detected as reopening
-            using (var ws = NewWorkspace()) {
+            using (RepackerWorkspace ws = NewWorkspace()) {
                 string stringWzPath = Path.Combine(stringDir, "String.wz");
                 string string000Path = Path.Combine(stringDir, "String_000.wz");
 
@@ -675,7 +685,7 @@ public sealed class RepackerEngineTests {
         bw.Write(encVer);
         bw.Write((sbyte) dirNames.Count);
 
-        var offsetPositions = new int[dirNames.Count];
+        int[] offsetPositions = new int[dirNames.Count];
         foreach ((int idx, string name) in dirNames.Index()) {
             bw.Write((byte) 3); // WzNodeKind.Directory
             bw.Write((sbyte) (-name.Length));

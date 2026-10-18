@@ -21,7 +21,7 @@ public static class WzValueFormatter {
             WzValue.Vector(var x, var y) => (RepackerPropertyKind.Vector, $"({x}, {y})"),
             WzValue.Uol(var s) => (RepackerPropertyKind.Uol, $"-> {s}"),
             WzValue.Object(var props) => (RepackerPropertyKind.Object, $"{props.Count} properties"),
-            WzValue.Canvas c => (RepackerPropertyKind.Canvas, $"{c.Width}x{c.Height} ({((WzCanvasFormat) c.Format).GetDisplayName()})"),
+            WzValue.Canvas c => (RepackerPropertyKind.Canvas, $"{c.Width}x{c.Height} ({c.Format.GetDisplayName()})"),
             WzValue.Sound(var len, var dur) => (RepackerPropertyKind.Sound, $"{dur} ms ({FormatByteSize(len)})"),
             WzValue.Convex(var items) => (RepackerPropertyKind.Convex, $"{items.Count} shapes"),
             WzValue.RawData(var len) => (RepackerPropertyKind.RawData, FormatByteSize(len)),
@@ -115,5 +115,5 @@ public static class WzValueFormatter {
     };
 
     internal static string EscapeJson(string s) =>
-        s.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        s.Replace(@"\", @"\\").Replace("\"", "\\\"");
 }

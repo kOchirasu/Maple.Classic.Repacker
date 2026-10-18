@@ -10,15 +10,17 @@ public static class WzPropertyPaths {
         // UOL is relative to the parent of the UOL property
         var segments = new List<string>(WzPath.Segments(WzPath.Parent(uolNodeSubPath)));
         foreach (string part in WzPath.Segments(uolExpression)) {
-            if (part == ".") {
-                continue;
-            }
-            if (part == "..") {
-                if (segments.Count > 0) {
-                    segments.RemoveAt(segments.Count - 1);
-                }
-            } else {
-                segments.Add(part);
+            switch (part) {
+                case ".":
+                    continue;
+                case "..":
+                    if (segments.Count > 0) {
+                        segments.RemoveAt(segments.Count - 1);
+                    }
+                    break;
+                default:
+                    segments.Add(part);
+                    break;
             }
         }
 

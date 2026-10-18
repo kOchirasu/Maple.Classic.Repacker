@@ -76,14 +76,14 @@ public static class WzCanvasCodec {
 
     public static byte[] DecodeToRgba(WzValue.Canvas canvas) {
         ArgumentNullException.ThrowIfNull(canvas);
-        return DecodeToRgba(canvas.Width, canvas.Height, (WzCanvasFormat) canvas.Format, canvas.Payload.Span);
+        return DecodeToRgba(canvas.Width, canvas.Height, canvas.Format, canvas.Payload.Span);
     }
 
     public static byte[] DecodeToPng(WzValue.Canvas canvas) {
         ArgumentNullException.ThrowIfNull(canvas);
         int w = Math.Max(1, canvas.Width);
         int h = Math.Max(1, canvas.Height);
-        byte[] rgba = DecodeToRgba(w, h, (WzCanvasFormat) canvas.Format, canvas.Payload.Span);
+        byte[] rgba = DecodeToRgba(w, h, canvas.Format, canvas.Payload.Span);
         return PngCodec.EncodeRgba(w, h, rgba);
     }
 

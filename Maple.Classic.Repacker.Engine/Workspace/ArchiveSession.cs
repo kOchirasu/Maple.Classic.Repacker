@@ -30,7 +30,7 @@ public sealed record DeletedPropertyEntry(
 /// virtual directory/image tracking, automatic split/directory <c>.wz</c> linking, and an archive-wide undo/redo history.
 /// </summary>
 public sealed class ArchiveSession : IDisposable {
-    private const int MaxUndoDepth = 100;
+    private const int MAX_UNDO_DEPTH = 100;
 
     internal sealed record ImageUndoSnapshot(
         byte[] ImageBytes,
@@ -675,10 +675,10 @@ public sealed class ArchiveSession : IDisposable {
     }
 
     private static void PushBounded(Stack<UndoHistoryEntry> stack, UndoHistoryEntry entry) {
-        if (stack.Count >= MaxUndoDepth) {
+        if (stack.Count >= MAX_UNDO_DEPTH) {
             UndoHistoryEntry[] items = stack.ToArray();
             stack.Clear();
-            for (int i = Math.Min(items.Length - 1, MaxUndoDepth - 2); i >= 0; i--) {
+            for (int i = Math.Min(items.Length - 1, MAX_UNDO_DEPTH - 2); i >= 0; i--) {
                 stack.Push(items[i]);
             }
         }
@@ -806,8 +806,7 @@ public sealed class ArchiveSession : IDisposable {
             return (false, null);
         }
 
-        DeletedPropertyEntry? targetEntry = null;
-        if (!map.TryGetValue(normSub, out targetEntry)) {
+        if (!map.TryGetValue(normSub, out DeletedPropertyEntry? targetEntry)) {
             foreach (string ancestor in WzPath.Ancestors(normSub)) {
                 if (map.TryGetValue(ancestor, out targetEntry)) {
                     break;

@@ -8,10 +8,6 @@ using System.Threading.Channels;
 using Maple.Classic.Repacker.Engine.Models;
 using Maple.Classic.Repacker.Engine.Workspace;
 using Maple.Classic.Repacker.UI.Rpc;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Maple.Classic.Repacker.UI;
 
@@ -115,10 +111,9 @@ public class Program {
                 : RepackerExportFormat.Auto;
             (string? error, string fileName, string mimeType, byte[] data) =
                 workspace.ExportNode(archiveId, path, parsedFormat);
-            if (error is not null) {
-                return Results.BadRequest(new { ok = false, error });
-            }
-            return Results.File(data, mimeType, fileName);
+            return error is not null
+                ? Results.BadRequest(new { ok = false, error })
+                : Results.File(data, mimeType, fileName);
         });
 
         app.UseWebSockets();
@@ -149,7 +144,7 @@ public class Program {
             }
         }, broadcastCts.Token);
 
-        app.Map("/ws", async (HttpContext ctx) => {
+        app.Map("/ws", async ctx => {
             if (!ctx.WebSockets.IsWebSocketRequest) {
                 ctx.Response.StatusCode = 400;
                 return;
@@ -186,7 +181,7 @@ public class Program {
                     }
 
                     byte[] msgBytes = frameMs.ToArray();
-                    _ = Task.Run(async () => {
+                    _ = Task.Run(() => {
                         try {
                             (long rpcId, string method, ReadOnlyMemory<byte> rawParams) = RpcSerializer.ReadRequestFrame(msgBytes);
                             if (rpcId > 0 && !string.IsNullOrWhiteSpace(method)) {
@@ -199,6 +194,7 @@ public class Program {
                         } catch {
                             // Ignore malformed RPC frame or disconnected socket
                         }
+                        return Task.CompletedTask;
                     }, ctx.RequestAborted);
                 }
             } catch {

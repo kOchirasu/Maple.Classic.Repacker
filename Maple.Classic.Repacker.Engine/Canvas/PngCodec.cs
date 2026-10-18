@@ -1,7 +1,6 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
 using System.IO.Hashing;
-using System.Text;
 using Maple.Classic.Repacker.Engine.IO;
 
 namespace Maple.Classic.Repacker.Engine.Canvas;
@@ -55,7 +54,7 @@ internal enum PngInterlaceMethod : byte {
 public static class PngCodec {
     private static ReadOnlySpan<byte> PngSignature => [137, 80, 78, 71, 13, 10, 26, 10];
 
-    private const byte BitDepth8 = 8;
+    private const byte BIT_DEPTH = 8;
 
     public static byte[] EncodeRgba(int width, int height, ReadOnlySpan<byte> rgba) {
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(width, 0);
@@ -73,7 +72,7 @@ public static class PngCodec {
         var w = new SpanWriter(ihdr);
         w.WriteUInt32BigEndian((uint) width);
         w.WriteUInt32BigEndian((uint) height);
-        w.WriteByte(BitDepth8);
+        w.WriteByte(BIT_DEPTH);
         w.WriteByte((byte) PngColorType.TruecolorAlpha);
         w.WriteByte((byte) PngCompressionMethod.Deflate);
         w.WriteByte((byte) PngFilterMethod.Adaptive);
@@ -167,7 +166,7 @@ public static class PngCodec {
         if (interlace != PngInterlaceMethod.None) {
             throw new InvalidDataException("Interlaced PNG images are not supported; please save as non-interlaced PNG.");
         }
-        if (bitDepth != BitDepth8) {
+        if (bitDepth != BIT_DEPTH) {
             throw new InvalidDataException($"Unsupported PNG bit depth {bitDepth} (only 8-bit per channel PNGs are supported).");
         }
 

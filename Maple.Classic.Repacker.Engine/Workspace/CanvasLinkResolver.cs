@@ -1,4 +1,3 @@
-using System.Globalization;
 using Maple.Classic.File.IO;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
@@ -41,7 +40,7 @@ internal static class CanvasLinkResolver {
         }
 
         byte[] pngBytes = WzCanvasCodec.DecodeToPng(visualCanvas);
-        WzCanvasFormat canvasFormat = (WzCanvasFormat) visualCanvas.Format;
+        WzCanvasFormat canvasFormat = visualCanvas.Format;
         return new CanvasPreviewDto(
             visualCanvas.Width,
             visualCanvas.Height,

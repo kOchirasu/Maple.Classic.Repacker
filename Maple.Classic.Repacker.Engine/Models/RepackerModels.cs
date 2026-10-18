@@ -1,3 +1,4 @@
+using Maple.Classic.File.IO;
 using Maple.Classic.Repacker.Engine.Canvas;
 
 namespace Maple.Classic.Repacker.Engine.Models;

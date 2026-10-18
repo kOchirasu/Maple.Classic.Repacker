@@ -11,12 +11,8 @@ namespace Maple.Classic.Repacker.Engine.IO;
 /// change how many bytes are written (a pitfall of <see cref="BinaryWriter"/>'s overloads). Writing past the end throws,
 /// and <see cref="EnsureFilled"/> catches a buffer that was sized for more fields than were written.
 /// </remarks>
-internal ref struct SpanWriter {
-    private readonly Span<byte> buffer;
-
-    public SpanWriter(Span<byte> buffer) {
-        this.buffer = buffer;
-    }
+internal ref struct SpanWriter(Span<byte> buffer) {
+    private readonly Span<byte> buffer = buffer;
 
     /// <summary>Number of bytes written so far.</summary>
     public int Position { get; private set; }

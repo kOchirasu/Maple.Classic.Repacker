@@ -11,15 +11,15 @@ namespace Maple.Classic.Repacker.Tests;
 /// output.
 /// </summary>
 public sealed class BinaryFormatTests(ITestOutputHelper output) {
-    private const string WavHeaderHex = "524946462C00000057415645666D742010000000010001002256000044AC00000200100064617461080000000102030405060708";
-    private const string Dx8WaveHeaderHex = "0283EB36E44F52CE119F530020AF0BA7708BEB36E44F52CE119F530020AF0BA7700001819F580556C3CE11BF0100AA0055595A0012010001002256000044AC0000020010000000";
-    private const string Dx8Mp3HeaderHex = "0283EB36E44F52CE119F530020AF0BA7708BEB36E44F52CE119F530020AF0BA7700001819F580556C3CE11BF0100AA0055595A001E5500020044AC0000803E0000010000000C00010002000000A10101007105";
-    private const string PngHex = "89504E470D0A1A0A0000000D49484452000000030000000208060000009D74661A000000174944415478016364E01653D48102C696FE594BA16C1D003C7F055726D6AB260000000049454E44AE426082";
+    private const string WAV_HEADER_HEX = "524946462C00000057415645666D742010000000010001002256000044AC00000200100064617461080000000102030405060708";
+    private const string DX8_WAVE_HEADER_HEX = "0283EB36E44F52CE119F530020AF0BA7708BEB36E44F52CE119F530020AF0BA7700001819F580556C3CE11BF0100AA0055595A0012010001002256000044AC0000020010000000";
+    private const string DX8_MP3_HEADER_HEX = "0283EB36E44F52CE119F530020AF0BA7708BEB36E44F52CE119F530020AF0BA7700001819F580556C3CE11BF0100AA0055595A001E5500020044AC0000803E0000010000000C00010002000000A10101007105";
+    private const string PNG_HEX = "89504E470D0A1A0A0000000D49484452000000030000000208060000009D74661A000000174944415478016364E01653D48102C696FE594BA16C1D003C7F055726D6AB260000000049454E44AE426082";
 
     [Fact]
     public void Dx8WaveHeader_IsByteExact() {
         WzValue.Sound sound = WzSoundCodec.CreateFromAudioBytes(BuildWav(sampleRate: 22050, channels: 1, bits: 16, pcmLength: 8));
-        AssertHex(Dx8WaveHeaderHex, sound.Header.ToArray());
+        AssertHex(DX8_WAVE_HEADER_HEX, sound.Header.ToArray());
     }
 
     [Fact]
@@ -27,7 +27,7 @@ public sealed class BinaryFormatTests(ITestOutputHelper output) {
         // MPEG-1 Layer III frame header: 128 kbps, 44.1 kHz, joint stereo
         byte[] mp3 = [0xFF, 0xFB, 0x90, 0x44, 0, 0, 0, 0];
         WzValue.Sound sound = WzSoundCodec.CreateFromAudioBytes(mp3);
-        AssertHex(Dx8Mp3HeaderHex, sound.Header.ToArray());
+        AssertHex(DX8_MP3_HEADER_HEX, sound.Header.ToArray());
     }
 
     [Fact]
@@ -36,7 +36,7 @@ public sealed class BinaryFormatTests(ITestOutputHelper output) {
         WzValue.Sound fromWav = WzSoundCodec.CreateFromAudioBytes(BuildWav(sampleRate: 22050, channels: 1, bits: 16, pcmLength: 8));
         var rawPcm = new WzValue.Sound(8, fromWav.Duration, new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }, fromWav.Header.ToArray());
         ExtractedSoundData extracted = WzSoundCodec.ExtractAudioStream(rawPcm);
-        AssertHex(WavHeaderHex, extracted.AudioBytes);
+        AssertHex(WAV_HEADER_HEX, extracted.AudioBytes);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public sealed class BinaryFormatTests(ITestOutputHelper output) {
         for (int i = 0; i < rgba.Length; i++) {
             rgba[i] = (byte) (i * 11);
         }
-        AssertHex(PngHex, PngCodec.EncodeRgba(3, 2, rgba));
+        AssertHex(PNG_HEX, PngCodec.EncodeRgba(3, 2, rgba));
     }
 
     [Theory]

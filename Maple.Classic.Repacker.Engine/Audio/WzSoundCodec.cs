@@ -131,7 +131,7 @@ public static class WzSoundCodec {
 
             // Find "data" chunk or store full RIFF WAVE with PCM WAVEFORMATEX header
             byte[] dx8Header = BuildDx8WaveHeader(formatTag == WzWaveFormatTag.Unknown ? WzWaveFormatTag.Pcm : formatTag, channels, sampleRate, byteRate, blockAlign, bitsPerSample);
-            int computedDuration = byteRate > 0 ? (int) ((long) (audioBytes.Length - 44) * 1000L / byteRate) : 1000;
+            int computedDuration = byteRate > 0 ? (int) ((audioBytes.Length - 44) * 1000L / byteRate) : 1000;
             return new WzValue.Sound(audioBytes.Length, Math.Max(1, computedDuration), audioBytes.ToArray(), dx8Header);
         }
 
@@ -140,7 +140,7 @@ public static class WzSoundCodec {
         int sr = mp3Sr > 0 ? mp3Sr : 44100;
         ushort ch = (ushort) (mp3Ch > 0 ? mp3Ch : 2);
         int byteRateMp3 = bitrateKbps > 0 ? (bitrateKbps * 1000) / 8 : 16000;
-        int duration = byteRateMp3 > 0 ? (int) ((long) audioBytes.Length * 1000L / byteRateMp3) : 1000;
+        int duration = byteRateMp3 > 0 ? (int) (audioBytes.Length * 1000L / byteRateMp3) : 1000;
         byte[] mp3Header = BuildDx8Mp3Header(ch, sr, byteRateMp3);
         return new WzValue.Sound(audioBytes.Length, Math.Max(1, duration), audioBytes.ToArray(), mp3Header);
     }
@@ -198,10 +198,10 @@ public static class WzSoundCodec {
         int lengthOffset = StandardDx8GuidHeader.Length;
         int formatOffset = lengthOffset + 1;
         int wfOffset = -1;
-        if (header.Length >= formatOffset + WaveFormatExSize && header[lengthOffset] >= 16 && formatOffset + header[lengthOffset] <= header.Length) {
+        if (header.Length >= formatOffset + WAVE_FORMAT_EX_SIZE && header[lengthOffset] >= 16 && formatOffset + header[lengthOffset] <= header.Length) {
             wfOffset = formatOffset;
-        } else if (header.Length >= WaveFormatExSize) {
-            wfOffset = header.Length - WaveFormatExSize;
+        } else if (header.Length >= WAVE_FORMAT_EX_SIZE) {
+            wfOffset = header.Length - WAVE_FORMAT_EX_SIZE;
         }
 
         if (wfOffset < 0 || wfOffset + 16 > header.Length) {
@@ -218,9 +218,9 @@ public static class WzSoundCodec {
         return channels is >= 1 and <= 8 && sampleRate is >= 4000 and <= 192000;
     }
 
-    private const int RiffWaveHeaderSize = 44;
-    private const int WaveFormatExSize = 18;      // WAVEFORMATEX with cbSize = 0
-    private const int MpegLayer3WaveFormatSize = 30; // MPEGLAYER3WAVEFORMAT (WAVEFORMATEX + 12 extra bytes)
+    private const int RIFF_WAVE_HEADER_SIZE = 44;
+    private const int WAVE_FORMAT_EX_SIZE = 18;      // WAVEFORMATEX with cbSize = 0
+    private const int MPEG_LAYER3_WAVE_FORMAT_SIZE = 30; // MPEGLAYER3WAVEFORMAT (WAVEFORMATEX + 12 extra bytes)
 
     /// <summary>Wraps raw PCM samples in a minimal 44-byte RIFF/WAVE container so browsers can play them.</summary>
     private static byte[] WrapPcmInRiffWave(
@@ -230,10 +230,10 @@ public static class WzSoundCodec {
         int avgBytesPerSec,
         ushort blockAlign,
         ushort bitsPerSample) {
-        byte[] wav = new byte[RiffWaveHeaderSize + pcm.Length];
+        byte[] wav = new byte[RIFF_WAVE_HEADER_SIZE + pcm.Length];
         var w = new SpanWriter(wav);
         w.WriteBytes("RIFF"u8);
-        w.WriteUInt32LittleEndian((uint) (RiffWaveHeaderSize - 8 + pcm.Length)); // RIFF chunk size
+        w.WriteUInt32LittleEndian((uint) (RIFF_WAVE_HEADER_SIZE - 8 + pcm.Length)); // RIFF chunk size
         w.WriteBytes("WAVE"u8);
         w.WriteBytes("fmt "u8);
         w.WriteUInt32LittleEndian(16);                                          // fmt chunk size (PCM WAVEFORMAT)
@@ -258,10 +258,10 @@ public static class WzSoundCodec {
         int avgBytesPerSec,
         ushort blockAlign,
         ushort bitsPerSample) {
-        byte[] header = new byte[StandardDx8GuidHeader.Length + 1 + WaveFormatExSize];
+        byte[] header = new byte[StandardDx8GuidHeader.Length + 1 + WAVE_FORMAT_EX_SIZE];
         var w = new SpanWriter(header);
         w.WriteBytes(StandardDx8GuidHeader);
-        w.WriteByte(WaveFormatExSize);
+        w.WriteByte(WAVE_FORMAT_EX_SIZE);
         WriteWaveFormatEx(ref w, formatTag, channels, sampleRate, avgBytesPerSec, blockAlign, bitsPerSample, extraSize: 0);
         w.EnsureFilled();
         return header;
@@ -269,12 +269,12 @@ public static class WzSoundCodec {
 
     /// <summary>Sound_DX8 header for MP3: DirectSound GUIDs, then a length-prefixed MPEGLAYER3WAVEFORMAT.</summary>
     private static byte[] BuildDx8Mp3Header(ushort channels, int sampleRate, int avgBytesPerSec) {
-        byte[] header = new byte[StandardDx8GuidHeader.Length + 1 + MpegLayer3WaveFormatSize];
+        byte[] header = new byte[StandardDx8GuidHeader.Length + 1 + MPEG_LAYER3_WAVE_FORMAT_SIZE];
         var w = new SpanWriter(header);
         w.WriteBytes(StandardDx8GuidHeader);
-        w.WriteByte(MpegLayer3WaveFormatSize);
+        w.WriteByte(MPEG_LAYER3_WAVE_FORMAT_SIZE);
         WriteWaveFormatEx(ref w, WzWaveFormatTag.MpegLayer3, channels, sampleRate, avgBytesPerSec, blockAlign: 1, bitsPerSample: 0,
-            extraSize: MpegLayer3WaveFormatSize - WaveFormatExSize);
+            extraSize: MPEG_LAYER3_WAVE_FORMAT_SIZE - WAVE_FORMAT_EX_SIZE);
         w.WriteUInt16LittleEndian(1);    // wID = MPEGLAYER3_ID_MPEG
         w.WriteUInt32LittleEndian(2);    // fdwFlags = MPEGLAYER3_FLAG_PADDING_OFF
         w.WriteUInt16LittleEndian(417);  // nBlockSize
