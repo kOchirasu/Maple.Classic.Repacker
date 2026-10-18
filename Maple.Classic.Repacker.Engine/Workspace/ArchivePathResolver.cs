@@ -5,6 +5,16 @@ namespace Maple.Classic.Repacker.Engine.Workspace;
 /// </summary>
 internal static class ArchivePathResolver {
     /// <summary>
+    /// Where an uploaded archive's original file is looked for when no path is known: <c>MSCW_DATA_FOLDER</c> and the
+    /// standard install locations.
+    /// </summary>
+    internal static IEnumerable<string> DefaultDataFolders => [
+        Environment.GetEnvironmentVariable("MSCW_DATA_FOLDER") ?? string.Empty,
+        @"C:\Nexon\Library\maplestorycw\appdata\Data",
+        @"C:\Nexon\MapleStory\Data",
+    ];
+
+    /// <summary>
     /// Returns every <c>.wz</c> file under <paramref name="fullDir"/> in open order: shallowest first, un-numbered root
     /// archives before numbered shards, and <c>Base.wz</c> first so it can subsume the category archives it links.
     /// </summary>
@@ -81,7 +91,12 @@ internal static class ArchivePathResolver {
         return requestedPath;
     }
 
-    internal static string? TryResolveDiskPath(IEnumerable<string> openArchivePaths, string cleanName, int byteLength, IEnumerable<string>? hintPaths) {
+    internal static string? TryResolveDiskPath(
+        IEnumerable<string> openArchivePaths,
+        string cleanName,
+        int byteLength,
+        IEnumerable<string>? hintPaths,
+        IEnumerable<string> dataFolders) {
         string baseStem = ArchiveSession.StripNumericShardSuffix(Path.GetFileNameWithoutExtension(cleanName));
         var candidateDirs = new List<string>();
         var seenDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -113,9 +128,9 @@ internal static class ArchivePathResolver {
                 AddDirAndParent(h);
             }
         }
-        AddDirAndParent(Environment.GetEnvironmentVariable("MSCW_DATA_FOLDER"));
-        AddDirAndParent(@"C:\Nexon\Library\maplestorycw\appdata\Data");
-        AddDirAndParent(@"C:\Nexon\MapleStory\Data");
+        foreach (string folder in dataFolders) {
+            AddDirAndParent(folder);
+        }
 
         string? sizeFallbackMatch = null;
         foreach (string dir in candidateDirs) {

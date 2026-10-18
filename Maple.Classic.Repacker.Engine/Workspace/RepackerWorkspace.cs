@@ -30,6 +30,7 @@ public sealed class RepackerWorkspace : IDisposable {
     private readonly Lock syncLock = new();
     private readonly List<ArchiveSession> archives = [];
     private readonly List<RepackerLogEntry> logs = [];
+    private readonly string[] dataFolders;
 
     private long stateVersion = 1;
     private long nextLogId = 1;
@@ -43,6 +44,15 @@ public sealed class RepackerWorkspace : IDisposable {
         RepackerNodeKind NodeKind,
         RepackerPropertyKind PropertyKind,
         byte[] SerializedBytes);
+
+    /// <param name="dataFolders">
+    /// Game data folders searched for an uploaded archive's original file (so it can be saved back in place). Defaults
+    /// to <c>MSCW_DATA_FOLDER</c> and the standard install locations; pass an empty list to only use paths the caller
+    /// provides (e.g. in tests, so a local game install can't be picked up).
+    /// </param>
+    public RepackerWorkspace(IEnumerable<string>? dataFolders = null) {
+        this.dataFolders = [.. dataFolders ?? ArchivePathResolver.DefaultDataFolders];
+    }
 
     public long StateVersion => Interlocked.Read(ref stateVersion);
     public string? SelectedArchiveId { get; private set; }
@@ -193,7 +203,7 @@ public sealed class RepackerWorkspace : IDisposable {
         lock (syncLock) {
             string resolvedPath = !string.IsNullOrWhiteSpace(filePath)
                 ? filePath.Trim()
-                : ArchivePathResolver.TryResolveDiskPath(archives.Select(static a => a.FilePath), cleanName, data.Length, hintPaths) ?? string.Empty;
+                : ArchivePathResolver.TryResolveDiskPath(archives.Select(static a => a.FilePath), cleanName, data.Length, hintPaths, dataFolders) ?? string.Empty;
             if (!string.IsNullOrWhiteSpace(resolvedPath)) {
                 string preferredPath = ArchivePathResolver.ResolvePreferredRootArchivePathOnDisk(resolvedPath);
                 if (!string.Equals(preferredPath, resolvedPath, StringComparison.OrdinalIgnoreCase) &&

@@ -9,6 +9,12 @@ using Xunit;
 namespace Maple.Classic.Repacker.Tests;
 
 public sealed class RepackerEngineTests {
+    /// <summary>
+    /// A workspace that ignores game data folders, so a local install (or <c>MSCW_DATA_FOLDER</c>) with an archive of
+    /// the same name can't replace the in-memory test archives.
+    /// </summary>
+    private static RepackerWorkspace NewWorkspace() => new(dataFolders: []);
+
     [Fact]
     public void PngCodec_RoundTrips_Rgba8888() {
         int width = 12;
@@ -119,7 +125,7 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void RepackerWorkspace_SupportsFullInspectionCrudSearchAndRepack() {
-        using var workspace = new RepackerWorkspace();
+        using var workspace = NewWorkspace();
 
         byte[] sprite36 = new byte[36 * 36 * 4];
         Array.Fill(sprite36, (byte) 200);
@@ -344,7 +350,7 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void FailedEdits_DoNotLeaveUndoEntries() {
-        using var workspace = new RepackerWorkspace();
+        using var workspace = NewWorkspace();
         byte[] archiveBytes;
         using (var wz = new WzArchive()) {
             var img = new WzValue.Object();
@@ -380,7 +386,7 @@ public sealed class RepackerEngineTests {
 
     [Fact]
     public void AddingNodes_ImportsFromFiles() {
-        using var workspace = new RepackerWorkspace();
+        using var workspace = NewWorkspace();
         byte[] archiveBytes;
         using (var wz = new WzArchive()) {
             var img = new WzValue.Object();
@@ -518,7 +524,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test A: Opening Character.wz directly auto-links Coat, Coat/_Canvas, and Weapon
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 ArchiveSummaryDto charSummary = ws.OpenArchiveFromFile(charWzPath);
                 Assert.True(charSummary.ImageCount >= 2);
 
@@ -545,7 +551,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test B: Opening 63-byte String.wz directly auto-links String_000.wz
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 ArchiveSummaryDto strSummary = ws.OpenArchiveFromFile(Path.Combine(stringDir, "String.wz"));
                 Assert.Equal(1, strSummary.ImageCount);
                 TreeNodeDto[] strChildren = ws.GetTreeChildren(strSummary.ArchiveId, "");
@@ -555,7 +561,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test C: Opening Base/Base.wz directly auto-links sibling Character and String directories
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 ArchiveSummaryDto baseSummary = ws.OpenArchiveFromFile(baseWzPath);
                 TreeNodeDto[] baseChildren = ws.GetTreeChildren(baseSummary.ArchiveId, "");
                 Assert.Contains(baseChildren, n => n.Name == "Character" && n.ChildCount > 0);
@@ -569,7 +575,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test D: OpenDataDirectory on Data/Character opens Character.wz with linked subdirs instead of duplicate shard archives
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 ArchiveSummaryDto[] opened = ws.OpenDataDirectory(charDir);
                 ArchiveSummaryDto single = Assert.Single(opened);
                 Assert.Equal("Character.wz", single.Name);
@@ -578,7 +584,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test D2: OpenDataDirectory on root Data/ merges everything under Base.wz (not Base_000.wz)
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 ArchiveSummaryDto[] opened = ws.OpenDataDirectory(tempRoot);
                 ArchiveSummaryDto single = Assert.Single(opened);
                 Assert.Equal("Base.wz", single.Name);
@@ -591,7 +597,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test E: OpenArchiveFromBytes resolves disk path via hintPaths and links String_000.wz and Character subdirs
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 byte[] strStubBytes = System.IO.File.ReadAllBytes(Path.Combine(stringDir, "String.wz"));
                 ArchiveSummaryDto strSummary = ws.OpenArchiveFromBytes("String.wz", strStubBytes, filePath: null, version: null, hintPaths: [tempRoot]);
                 Assert.Equal(1, strSummary.ImageCount);
@@ -607,7 +613,7 @@ public sealed class RepackerEngineTests {
             }
 
             // Test F: Opening a shard or child .wz file that is already linked through an open archive is detected as reopening
-            using (var ws = new RepackerWorkspace()) {
+            using (var ws = NewWorkspace()) {
                 string stringWzPath = Path.Combine(stringDir, "String.wz");
                 string string000Path = Path.Combine(stringDir, "String_000.wz");
 
