@@ -2,6 +2,8 @@
 
 MapleStory Classic World (`mscw`) `.wz` and `.img` repacker, sprite/animation studio, and property editor built on C# (`.NET 10`), MessagePack-over-WebSockets RPC, and an Electron / WebView2 frontend.
 
+<img width="1648" height="1127" alt="RepackerDemo" src="https://github.com/user-attachments/assets/ff48937a-188d-4195-96ac-8fab96875197" />
+
 ## Projects
 
 - **[`Maple.Classic.File`](Maple.Classic.File)** *(submodule)*: Core zero-copy `.wz` archive and `.img` property parser, reader, and writer (`Maple.Classic.File.IO`).
