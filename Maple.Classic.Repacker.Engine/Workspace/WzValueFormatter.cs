@@ -1,5 +1,5 @@
 using System.Globalization;
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
 
@@ -22,9 +22,9 @@ public static class WzValueFormatter {
             WzValue.Uol(var s) => (RepackerPropertyKind.Uol, $"-> {s}"),
             WzValue.Object(var props) => (RepackerPropertyKind.Object, $"{props.Count} properties"),
             WzValue.Canvas c => (RepackerPropertyKind.Canvas, $"{c.Width}x{c.Height} ({c.Format.GetDisplayName()})"),
-            WzValue.Sound(var len, var dur) => (RepackerPropertyKind.Sound, $"{dur} ms ({FormatByteSize(len)})"),
+            WzValue.Sound(var len, var dur, _, _) => (RepackerPropertyKind.Sound, $"{dur} ms ({FormatByteSize(len)})"),
             WzValue.Convex(var items) => (RepackerPropertyKind.Convex, $"{items.Count} shapes"),
-            WzValue.RawData(var len) => (RepackerPropertyKind.RawData, FormatByteSize(len)),
+            WzValue.RawData(var len, _) => (RepackerPropertyKind.RawData, FormatByteSize(len)),
             _ => (RepackerPropertyKind.None, string.Empty),
         };
     }

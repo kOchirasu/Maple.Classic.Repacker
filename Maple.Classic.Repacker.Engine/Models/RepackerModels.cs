@@ -1,4 +1,4 @@
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Canvas;
 
 namespace Maple.Classic.Repacker.Engine.Models;
@@ -199,14 +199,13 @@ public sealed record NodePreviewDto(
     string JsonPreview,
     byte[] RawBinarySlice);
 
-public sealed record SearchQueryDto {
-    public string? ArchiveId { get; init; }
-    public string? Query { get; init; }
-    public string? ValueQuery { get; init; }
-    public RepackerPropertyKind? PropertyKindFilter { get; init; }
-    public bool ExactMatch { get; init; }
-    public int MaxResults { get; init; } = 250;
-}
+public sealed record SearchQueryDto(
+    string? ArchiveId = null,
+    string? Query = null,
+    string? ValueQuery = null,
+    RepackerPropertyKind? PropertyKindFilter = null,
+    bool ExactMatch = false,
+    int MaxResults = 250);
 
 public sealed record SearchResultItemDto(
     string ArchiveId,

@@ -1,4 +1,5 @@
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Archive;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Models;
 
 namespace Maple.Classic.Repacker.Engine.Workspace;

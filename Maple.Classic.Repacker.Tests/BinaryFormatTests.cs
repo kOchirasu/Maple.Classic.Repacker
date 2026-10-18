@@ -1,4 +1,4 @@
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Audio;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Xunit;

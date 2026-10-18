@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.IO;
 
 namespace Maple.Classic.Repacker.Engine.Audio;

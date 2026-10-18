@@ -1,4 +1,4 @@
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 
 namespace Maple.Classic.Repacker.Engine.Workspace;
 

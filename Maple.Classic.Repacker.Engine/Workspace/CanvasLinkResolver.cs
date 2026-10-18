@@ -1,4 +1,4 @@
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
 using static Maple.Classic.Repacker.Engine.Workspace.WzPropertyPaths;
@@ -118,7 +118,12 @@ internal static class CanvasLinkResolver {
         return (null, null);
     }
 
-    internal static int InlineLinksRecursive(IReadOnlyList<ArchiveSession> archives, ArchiveSession session, WzValue imgRoot, WzValue node) {
+    internal static int InlineLinksRecursive(
+        IReadOnlyList<ArchiveSession> archives,
+        ArchiveSession session,
+        WzValue imgRoot,
+        string subPath,
+        WzValue node) {
         int count = 0;
         if (node is WzValue.Canvas canvas) {
             string? inlink = canvas["_inlink"]?.AsString();
@@ -132,11 +137,17 @@ internal static class CanvasLinkResolver {
             }
 
             if (resolved is not null) {
-                canvas.Width = resolved.Width;
-                canvas.Height = resolved.Height;
-                canvas.Format = resolved.Format;
-                canvas.Payload = resolved.Payload;
                 canvas.Properties.RemoveAll(static p => p.Name is "_inlink" or "_outlink");
+                WzValue.Canvas updated = canvas with {
+                    Width = resolved.Width,
+                    Height = resolved.Height,
+                    Format = resolved.Format,
+                    Payload = resolved.Payload,
+                };
+                node = updated;
+                if (!string.IsNullOrEmpty(subPath)) {
+                    TryReplacePropertyNode(imgRoot, subPath, updated);
+                }
                 count++;
             }
         }
@@ -144,7 +155,8 @@ internal static class CanvasLinkResolver {
         IReadOnlyList<WzProperty>? kids = node.Children;
         if (kids is not null) {
             for (int i = 0; i < kids.Count; i++) {
-                count += InlineLinksRecursive(archives, session, imgRoot, kids[i].Value);
+                string childSubPath = WzPath.Combine(subPath, kids[i].Name);
+                count += InlineLinksRecursive(archives, session, imgRoot, childSubPath, kids[i].Value);
             }
         }
         return count;

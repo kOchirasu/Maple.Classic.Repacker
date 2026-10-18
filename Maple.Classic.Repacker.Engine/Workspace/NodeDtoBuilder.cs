@@ -1,5 +1,5 @@
 using System.Globalization;
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Models;
 using static Maple.Classic.Repacker.Engine.Workspace.WzPropertyPaths;
 using static Maple.Classic.Repacker.Engine.Workspace.WzValueFormatter;

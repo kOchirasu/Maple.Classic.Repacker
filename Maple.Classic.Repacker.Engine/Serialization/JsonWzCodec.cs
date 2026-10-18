@@ -1,5 +1,5 @@
 using System.Text.Json;
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Canvas;
 
 namespace Maple.Classic.Repacker.Engine.Serialization;
@@ -129,9 +129,7 @@ public static class JsonWzCodec {
         if (obj.TryGetProperty("_rawdata", out JsonElement rawFlag) && rawFlag.ValueKind == JsonValueKind.True) {
             WzValue.RawData? prevRaw = existing as WzValue.RawData;
             int bytes = obj.TryGetProperty("bytes", out JsonElement bEl) && bEl.TryGetInt32(out int b) ? b : (prevRaw?.DataLength ?? 0);
-            return new WzValue.RawData(bytes) {
-                Payload = prevRaw?.Payload ?? ReadOnlyMemory<byte>.Empty,
-            };
+            return new WzValue.RawData(bytes, prevRaw?.Payload ?? ReadOnlyMemory<byte>.Empty);
         }
 
         // 6. Standard WzValue.Object property list

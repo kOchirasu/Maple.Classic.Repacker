@@ -4,30 +4,27 @@ using Maple.Classic.Repacker.Engine.Models;
 
 namespace Maple.Classic.Repacker.UI;
 
-public sealed record SavedWindowBoundsDto {
-    public int Width { get; set; }
-    public int Height { get; set; }
-    public int? X { get; set; }
-    public int? Y { get; set; }
-    public bool Maximized { get; set; }
-}
+public sealed record SavedWindowBoundsDto(
+    int Width = 0,
+    int Height = 0,
+    int? X = null,
+    int? Y = null,
+    bool Maximized = false);
 
-public sealed record SavedRepackerLayoutDto {
-    public double? TreePaneWidth { get; set; }
-    public double? InspectorPaneWidth { get; set; }
-    public bool? InspectorCollapsed { get; set; }
-    public double? WorkbenchHeight { get; set; }
-    public bool? WorkbenchCollapsed { get; set; }
-}
+public sealed record SavedRepackerLayoutDto(
+    double? TreePaneWidth = null,
+    double? InspectorPaneWidth = null,
+    bool? InspectorCollapsed = null,
+    double? WorkbenchHeight = null,
+    bool? WorkbenchCollapsed = null);
 
-public sealed record SavedRepackerUiStateDto {
-    public SavedRepackerLayoutDto? Layout { get; set; }
-    public RepackerWorkbenchTab? ActiveWorkbenchTab { get; set; }
-    public RepackerCanvasBackground? CanvasBackground { get; set; }
-    public bool? ShowOriginCrosshair { get; set; }
-    public bool? ShowVectorBounds { get; set; }
-    public bool? ShowPixelGrid { get; set; }
-}
+public sealed record SavedRepackerUiStateDto(
+    SavedRepackerLayoutDto? Layout = null,
+    RepackerWorkbenchTab? ActiveWorkbenchTab = null,
+    RepackerCanvasBackground? CanvasBackground = null,
+    bool? ShowOriginCrosshair = null,
+    bool? ShowVectorBounds = null,
+    bool? ShowPixelGrid = null);
 
 public sealed class PersistedRepackerSettings {
     public SavedWindowBoundsDto? MainWindow { get; set; }

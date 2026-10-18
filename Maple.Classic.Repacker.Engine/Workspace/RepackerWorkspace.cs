@@ -2,7 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
-using Maple.Classic.File.IO;
+using Maple.Classic.File.IO.Archive;
+using Maple.Classic.File.IO.Values;
 using Maple.Classic.Repacker.Engine.Audio;
 using Maple.Classic.Repacker.Engine.Canvas;
 using Maple.Classic.Repacker.Engine.Models;
@@ -1136,12 +1137,16 @@ public sealed class RepackerWorkspace : IDisposable {
             (int width, int height, byte[] compressed) = WzCanvasCodec.EncodePngToCanvasPayload(pngBytes, targetFormat);
 
             return EditImage(session, target.ImagePath, () => {
-                canvas.Width = width;
-                canvas.Height = height;
-                canvas.Format = targetFormat;
-                canvas.Payload = compressed;
                 canvas.Properties.RemoveAll(static p => p.Name is "_outlink" or "_inlink");
-                return null;
+                WzValue.Canvas updated = canvas with {
+                    Width = width,
+                    Height = height,
+                    Format = targetFormat,
+                    Payload = compressed,
+                };
+                return TryReplacePropertyNode(target.ImageRoot, target.SubPath, updated)
+                    ? null
+                    : $"Failed to replace Canvas at \"{target.SubPath}\".";
             }, () => $"Replaced Canvas \"{path}\" with {width}x{height} PNG ({targetFormat.GetDisplayName()}, {compressed.Length:N0} B).");
         });
 
@@ -1156,9 +1161,13 @@ public sealed class RepackerWorkspace : IDisposable {
             WzValue.Canvas canvas = target.Value;
             byte[] reencoded = WzCanvasCodec.EncodeFromRgba(canvas.Width, canvas.Height, newFormat, WzCanvasCodec.DecodeToRgba(canvas));
             return EditImage(session, target.ImagePath, () => {
-                canvas.Format = newFormat;
-                canvas.Payload = reencoded;
-                return null;
+                WzValue.Canvas updated = canvas with {
+                    Format = newFormat,
+                    Payload = reencoded,
+                };
+                return TryReplacePropertyNode(target.ImageRoot, target.SubPath, updated)
+                    ? null
+                    : $"Failed to convert Canvas at \"{target.SubPath}\".";
             }, () => $"Converted Canvas \"{path}\" to {newFormat.GetDisplayName()} ({reencoded.Length:N0} B).");
         });
 
@@ -1220,7 +1229,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
                 // One undo step, committed only if something was actually inlined
                 ArchiveSession.UndoHistoryEntry undo = session.CaptureImageUndo(imgPath);
-                totalInlined = CanvasLinkResolver.InlineLinksRecursive(archives, session, imgRoot, target);
+                totalInlined = CanvasLinkResolver.InlineLinksRecursive(archives, session, imgRoot, subPath, target);
                 if (totalInlined > 0) {
                     session.CommitUndo(undo);
                     session.MarkImageModified(imgPath);
@@ -1233,7 +1242,7 @@ public sealed class RepackerWorkspace : IDisposable {
                 }
                 foreach (string imagePath in EnumerateLiveImages(session, dir, norm)) {
                     WzValue root = session.GetOrParseImage(imagePath);
-                    int count = CanvasLinkResolver.InlineLinksRecursive(archives, session, root, root);
+                    int count = CanvasLinkResolver.InlineLinksRecursive(archives, session, root, string.Empty, root);
                     if (count > 0) {
                         session.MarkImageModified(imagePath);
                         totalInlined += count;
